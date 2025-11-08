@@ -43,6 +43,14 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
     Returns:
         Processing result dictionary
     """
+    cost_before = 0.0
+    tokens_before = 0
+
+    if provider:
+        metrics = provider.get_metrics()
+        cost_before = metrics['total_cost_eur']
+        tokens_before = metrics['total_tokens']
+
     try:
         # Step 1: Ingest and validate page count
         ingest_result = ingest_pdf(pdf_bytes, filename)
@@ -53,13 +61,21 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         # If no tables found, try OCR on all pages
         if not all_tables:
             ocr_results = ocr_pdf_all_pages(pdf_bytes)
-            # Could add AI enhancement here if provider is available
-            # For now, just note that OCR was performed
+
+            # AI enhancement of OCR text if provider is available
+            if provider and provider.name != "Pole (ainult reeglid)":
+                for page_num, ocr_text in ocr_results:
+                    enhanced_text = provider.enhance_ocr_text(ocr_text)
+                    # Note: enhanced text could be reparsed for tables here
 
         # Step 3: Merge tables
         merged_table = merge_tables(all_tables) if all_tables else pd.DataFrame()
 
-        # Step 4: Normalize data
+        # Step 4: Normalize data with AI if available
+        if provider and provider.name != "Pole (ainult reeglid)" and not merged_table.empty:
+            # AI-enhanced normalization
+            merged_table = provider.normalize_table(merged_table, context=f"Work hours from {filename}")
+
         normalized_data = normalize_dataframe(merged_table)
 
         # Step 5: Find expected total (if present)
@@ -67,6 +83,14 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
 
         # Step 6: Validate
         validation_result = validate_file_data(normalized_data, expected_total)
+
+        # Calculate cost for this file
+        file_cost = 0.0
+        file_tokens = 0
+        if provider:
+            metrics = provider.get_metrics()
+            file_cost = metrics['total_cost_eur'] - cost_before
+            file_tokens = metrics['total_tokens'] - tokens_before
 
         return {
             'filename': filename,
@@ -77,7 +101,9 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'warnings': validation_result['warnings'],
             'total_hours': validation_result['total_hours'],
             'valid_row_count': validation_result['valid_row_count'],
-            'invalid_row_count': validation_result['invalid_row_count']
+            'invalid_row_count': validation_result['invalid_row_count'],
+            'ai_cost': file_cost,
+            'ai_tokens': file_tokens
         }
 
     except PageLimitExceededError as e:
@@ -211,8 +237,10 @@ def main():
                 # Show AI cost summary if provider was used
                 if provider and provider.name != "Pole (ainult reeglid)":
                     metrics = provider.get_metrics()
-                    if metrics['total_cost_eur'] > 0:
-                        st.info(f"💰 **AI kulu kokku:** €{metrics['total_cost_eur']:.4f} ({metrics['total_tokens']} tokenit)")
+                    if metrics['total_tokens'] > 0:
+                        st.info(f"💰 **AI kulu kokku:** €{metrics['total_cost_eur']:.4f} | 🎯 **Tokenit:** {metrics['total_tokens']:,}")
+                    else:
+                        st.warning("⚠️ AI teenusepakkuja valitud, aga API päringuid ei tehtud. Kontrolli API võtit või kas failidest leiti tabeleid.")
 
 
                 # Show per-file results
@@ -224,9 +252,17 @@ def main():
                             col2.metric("Kehtivaid ridu", result.get('valid_row_count', 0))
                             col3.metric("Tunde kokku", f"{result.get('total_hours', 0):.2f}")
 
+                            # Show tables found
+                            st.caption(f"📊 Tabeleid leitud: {result.get('tables_found', 0)}")
+
                             # Show AI cost per file if available
-                            if provider and provider.name != "Pole (ainult reeglid)" and result.get('ai_cost'):
-                                st.caption(f"💰 AI kulu: €{result['ai_cost']:.4f}")
+                            if provider and provider.name != "Pole (ainult reeglid)":
+                                ai_tokens = result.get('ai_tokens', 0)
+                                ai_cost = result.get('ai_cost', 0.0)
+                                if ai_tokens > 0:
+                                    st.caption(f"💰 AI kulu: €{ai_cost:.4f} | 🎯 Tokenit: {ai_tokens:,}")
+                                else:
+                                    st.caption(f"⚠️ AI-d ei kasutatud (tabeleid ei leitud või viga)")
 
                             # Warnings
                             if result.get('warnings'):
@@ -314,9 +350,10 @@ def main():
 
             # Cost metrics
             st.divider()
+            st.subheader("💰 Kulud")
             col1, col2, col3 = st.columns(3)
-            col1.metric("Tokenit kokku", f"{metrics['total_tokens']:,}")
-            col2.metric("💰 Kulu kokku (EUR)", f"€{metrics['total_cost_eur']:.4f}")
+            col1.metric("🎯 Tokenit kokku", f"{metrics['total_tokens']:,}")
+            col2.metric("💰 Kulu (EUR)", f"€{metrics['total_cost_eur']:.4f}")
 
             # Calculate accuracy
             if 'results' in st.session_state:
