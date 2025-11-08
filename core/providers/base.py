@@ -82,8 +82,19 @@ class AIProvider(ABC):
         Returns:
             Dictionary with:
             - rows: List of dicts with keys: Kuupäev, Töötaja, Projekt, Tunnid
-            - metadata: Dict with warnings, calculated_fields, unreadable_fields
+            - columns: List of column names
+            - metadata: Dict with warnings, calculated_fields, unreadable_fields, etc.
+            - formatting: Dict with visual structure information (optional)
             - success: Boolean
+
+        Formatting Dictionary (optional):
+            - merged_cells: List of merged cell ranges
+              [{"start_row": 0, "start_col": 0, "end_row": 0, "end_col": 2, "value": "Header"}]
+            - cell_borders: Dict mapping "row,col" to border info
+              {"0,0": {"top": True, "bottom": True, "left": True, "right": True}}
+            - header_rows: List of row indices that are headers [0, 1]
+            - total_rows: List of row indices that contain totals [10]
+            - bold_cells: List of [row, col] coordinates for bold cells [[0, 0], [0, 1]]
 
         AI Instructions:
         - Extract exact data from the image
@@ -94,6 +105,7 @@ class AIProvider(ABC):
         - NEVER invent data that isn't visible or calculable
         - Date format: dd.mm.yyyy
         - Hours: numeric, rounded to 2 decimals
+        - FORMATTING: Detect table structure (borders, merged cells) if requested
         """
         pass
 
@@ -191,7 +203,9 @@ class NoOpProvider(AIProvider):
         """Not available without AI."""
         return {
             'rows': [],
+            'columns': [],
             'metadata': {'warning': 'Vision API not available without AI provider'},
+            'formatting': {},
             'success': False
         }
 

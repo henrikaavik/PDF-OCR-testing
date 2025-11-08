@@ -168,7 +168,7 @@ Return the cleaned text without explanations."""
         # Encode image to base64
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
-        prompt = """Extract ALL data from ALL tables in this image.
+        prompt = """Extract ALL data from ALL tables in this image AND detect the visual table structure.
 
 STEP 1 - Find all tables:
 - Look for ALL tables on this page (there may be 1, 2, 3, or more tables)
@@ -190,6 +190,13 @@ STEP 4 - Format each row:
 - For dates: format as dd.mm.yyyy
 - For numbers: round to 2 decimals
 
+STEP 5 - Detect table VISUAL STRUCTURE (borders, merged cells):
+- Merged cells: Identify any cells that span multiple columns or rows (common in headers)
+- Cell borders: For each cell, detect which borders are visible (top, bottom, left, right)
+- Header rows: Identify which row indices contain headers (often row 0, but may be multiple)
+- Total rows: Identify rows containing totals/sums (often labeled "Kokku", "Total", "Summa")
+- Bold cells: Identify cells with bold or emphasized text
+
 Return ONLY valid JSON (no markdown, no explanations):
 {
   "columns": ["Col1", "Col2", "Col3"],
@@ -201,6 +208,18 @@ Return ONLY valid JSON (no markdown, no explanations):
     "tables_found": 2,
     "total_rows": 10,
     "total_columns": 3
+  },
+  "formatting": {
+    "merged_cells": [
+      {"start_row": 0, "start_col": 0, "end_row": 0, "end_col": 2, "value": "Header Text"}
+    ],
+    "cell_borders": {
+      "0,0": {"top": true, "bottom": true, "left": true, "right": true},
+      "0,1": {"top": true, "bottom": true, "left": false, "right": true}
+    },
+    "header_rows": [0],
+    "total_rows": [10],
+    "bold_cells": [[0, 0], [0, 1], [0, 2], [10, 0]]
   }
 }
 
@@ -208,6 +227,8 @@ CRITICAL:
 - You MUST return at least one row for each table you find
 - If you see 2 tables, you MUST extract rows from BOTH tables
 - Do NOT return empty "rows" array if you found tables
+- Cell borders: Only include cells that have visible borders (skip cells without borders to save space)
+- Row/column indices: Use 0-based indexing (first row is 0, first column is 0)
 """
 
         start_time = time.time()
@@ -263,10 +284,14 @@ CRITICAL:
             if 'total_rows' not in metadata:
                 metadata['total_rows'] = len(rows)
 
+            # Extract formatting information (optional, may not always be present)
+            formatting = result.get('formatting', {})
+
             return {
                 'columns': columns,
                 'rows': rows,
                 'metadata': metadata,
+                'formatting': formatting,
                 'success': True
             }
 
@@ -277,5 +302,6 @@ CRITICAL:
                 'columns': [],
                 'rows': [],
                 'metadata': {'error': str(e)},
+                'formatting': {},
                 'success': False
             }

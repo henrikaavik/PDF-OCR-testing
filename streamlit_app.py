@@ -63,6 +63,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                 'error': 'AI teenusepakkuja on nõutav. Palun vali AI teenusepakkuja (ChatGPT, Grok, Kimi või Gemini).',
                 'data': [],
                 'columns': [],
+                'formatting': {},
                 'warnings': ['AI teenusepakkuja puudub. Rule-based meetodid on eemaldatud.']
             }
 
@@ -73,6 +74,13 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         all_columns = []
         vision_warnings = []
         vision_tables_count = 0
+        combined_formatting = {
+            'merged_cells': [],
+            'cell_borders': {},
+            'header_rows': [],
+            'total_rows': [],
+            'bold_cells': []
+        }
 
         # Convert PDF pages to images
         images = pdf_to_images(pdf_bytes)
@@ -111,6 +119,28 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                     vision_tables_count += metadata['tables_found']
                     vision_warnings.append(
                         f"Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit"
+                    )
+
+                # Collect formatting metadata from this page
+                page_formatting = vision_result.get('formatting', {})
+                if page_formatting:
+                    # Merge formatting from this page into combined formatting
+                    if page_formatting.get('merged_cells'):
+                        combined_formatting['merged_cells'].extend(page_formatting['merged_cells'])
+                    if page_formatting.get('cell_borders'):
+                        combined_formatting['cell_borders'].update(page_formatting['cell_borders'])
+                    if page_formatting.get('header_rows'):
+                        combined_formatting['header_rows'].extend(page_formatting['header_rows'])
+                    if page_formatting.get('total_rows'):
+                        combined_formatting['total_rows'].extend(page_formatting['total_rows'])
+                    if page_formatting.get('bold_cells'):
+                        combined_formatting['bold_cells'].extend(page_formatting['bold_cells'])
+
+                    vision_warnings.append(
+                        f"Lehekülg {page_num+1}: Leitud vormindus - "
+                        f"Ühendatud lahtrid: {len(page_formatting.get('merged_cells', []))}, "
+                        f"Piirjooned: {len(page_formatting.get('cell_borders', {}))}, "
+                        f"Paksud lahtrid: {len(page_formatting.get('bold_cells', []))}"
                     )
 
                 # Only process rows if they exist
@@ -157,6 +187,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                 'error': 'Vision API ei suutnud ühtegi rida ekstraheerida.',
                 'data': [],
                 'columns': all_columns,
+                'formatting': combined_formatting,
                 'warnings': vision_warnings,
                 'page_count': ingest_result['page_count'],
                 'tables_found': vision_tables_count,
@@ -218,6 +249,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'used_vision_api': True,
             'columns': all_columns,
             'data': validation_result['valid_data'],
+            'formatting': combined_formatting,
             'warnings': validation_result['warnings'],
             'total_hours': validation_result['total_hours'],
             'valid_row_count': validation_result['valid_row_count'],
@@ -233,6 +265,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'error': str(e),
             'data': [],
             'columns': [],
+            'formatting': {},
             'warnings': [str(e)]
         }
 
@@ -243,6 +276,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'error': str(e),
             'data': [],
             'columns': [],
+            'formatting': {},
             'warnings': [f"Viga faili töötlemisel: {str(e)}"]
         }
 
@@ -405,7 +439,8 @@ def main():
                                 xlsx_bytes = create_per_file_xlsx(
                                     result['data'],
                                     result['filename'],
-                                    result.get('columns')  # Pass columns if available
+                                    result.get('columns'),  # Pass columns if available
+                                    result.get('formatting')  # Pass formatting if available
                                 )
                                 st.download_button(
                                     label="⬇️ Laadi alla XLSX",
