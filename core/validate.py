@@ -3,7 +3,7 @@ Rule-based validation module.
 Validates extracted data against schema requirements and performs total consistency checks.
 """
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from utils.dates import is_valid_date
 
 
