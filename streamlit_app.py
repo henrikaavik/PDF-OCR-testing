@@ -84,10 +84,17 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                 )
 
                 # DEBUG: Always log what Vision API returned
+                import json as debug_json
+                vision_result_debug = {
+                    'success': vision_result.get('success'),
+                    'rows_count': len(vision_result.get('rows', [])),
+                    'columns_count': len(vision_result.get('columns', [])),
+                    'columns': vision_result.get('columns', []),
+                    'rows_sample': vision_result.get('rows', [])[:3] if vision_result.get('rows') else [],
+                    'metadata': vision_result.get('metadata', {})
+                }
                 vision_warnings.append(
-                    f"DEBUG - Lehekülg {page_num+1}: Vision API success={vision_result.get('success')}, "
-                    f"rows_count={len(vision_result.get('rows', []))}, "
-                    f"columns_count={len(vision_result.get('columns', []))}"
+                    f"DEBUG - Lehekülg {page_num+1}:\n```json\n{debug_json.dumps(vision_result_debug, indent=2, ensure_ascii=False)}\n```"
                 )
 
                 if vision_result['success']:
