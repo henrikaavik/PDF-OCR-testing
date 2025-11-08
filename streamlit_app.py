@@ -9,13 +9,11 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.9.0"  # DEBUG for both Vision API and rule-based pipeline
+__version__ = "2.0.0"  # AI-only: Rule-based methods removed, Vision API only
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
-from core.ocr import ocr_pdf_page, ocr_pdf_all_pages, pdf_to_images
-from core.tables import extract_all_tables, merge_tables, parse_table_from_text
-from core.normalize import normalize_dataframe, find_total_row
+from core.ocr import pdf_to_images
 from core.validate import validate_file_data
 from core.aggregate import aggregate_multiple_files, get_quarter_summary_text
 from core.providers.base import create_provider
@@ -35,12 +33,12 @@ st.set_page_config(
 
 def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[str, Any]:
     """
-    Process a single PDF file through the entire pipeline.
+    Process a single PDF file using AI Vision API only.
 
     Args:
         filename: Original filename
         pdf_bytes: PDF file bytes
-        provider: Optional AI provider for enhancement
+        provider: AI provider (required)
 
     Returns:
         Processing result dictionary
@@ -57,203 +55,152 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         # Step 1: Ingest and validate page count
         ingest_result = ingest_pdf(pdf_bytes, filename)
 
-        # Step 2: Extract tables from all pages (rule-based)
-        all_tables = extract_all_tables(pdf_bytes, ingest_result['pages'])
+        # Step 2: Check if AI provider is available
+        if not provider or provider.name == "Pole (ainult reeglid)":
+            return {
+                'filename': filename,
+                'success': False,
+                'error': 'AI teenusepakkuja on nõutav. Palun vali AI teenusepakkuja (ChatGPT, Grok, Kimi või Gemini).',
+                'data': [],
+                'columns': [],
+                'warnings': ['AI teenusepakkuja puudub. Rule-based meetodid on eemaldatud.']
+            }
+
+        # Step 3: Use VISION API to extract tables
+        import json as debug_json
 
         all_vision_data = []
         all_columns = []
         vision_warnings = []
         vision_tables_count = 0
-        used_vision_api = False
 
-        # DEBUG: Log rule-based extraction results
-        import json as debug_json
-        if all_tables:
+        # Convert PDF pages to images
+        images = pdf_to_images(pdf_bytes)
+
+        for page_num, image in enumerate(images):
+            # Convert PIL Image to bytes
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format='PNG')
+            image_bytes = img_byte_arr.getvalue()
+
+            # Extract from image using Vision API
+            vision_result = provider.extract_table_from_image(
+                image_bytes,
+                context=f"{filename} page {page_num+1}"
+            )
+
+            # DEBUG: Always log what Vision API returned
+            vision_result_debug = {
+                'success': vision_result.get('success'),
+                'rows_count': len(vision_result.get('rows', [])),
+                'columns_count': len(vision_result.get('columns', [])),
+                'columns': vision_result.get('columns', []),
+                'rows_sample': vision_result.get('rows', [])[:3] if vision_result.get('rows') else [],
+                'metadata': vision_result.get('metadata', {})
+            }
             vision_warnings.append(
-                f"DEBUG - Rule-based ekstraheerimine: Leitud {len(all_tables)} tabelit PDF-ist"
+                f"DEBUG - Lehekülg {page_num+1}:\n```json\n{debug_json.dumps(vision_result_debug, indent=2, ensure_ascii=False)}\n```"
             )
 
-        # Step 3: If no tables found, use VISION API (PREMIUM METHOD)
-        if not all_tables and provider and provider.name != "Pole (ainult reeglid)":
-            # Convert PDF pages to images
-            images = pdf_to_images(pdf_bytes)
+            if vision_result['success']:
+                # Collect metadata ALWAYS (even if no rows extracted)
+                metadata = vision_result.get('metadata', {})
 
-            for page_num, image in enumerate(images):
-                # Convert PIL Image to bytes
-                img_byte_arr = io.BytesIO()
-                image.save(img_byte_arr, format='PNG')
-                image_bytes = img_byte_arr.getvalue()
-
-                # Extract from image using Vision API
-                vision_result = provider.extract_table_from_image(
-                    image_bytes,
-                    context=f"{filename} page {page_num+1}"
-                )
-
-                # DEBUG: Always log what Vision API returned
-                import json as debug_json
-                vision_result_debug = {
-                    'success': vision_result.get('success'),
-                    'rows_count': len(vision_result.get('rows', [])),
-                    'columns_count': len(vision_result.get('columns', [])),
-                    'columns': vision_result.get('columns', []),
-                    'rows_sample': vision_result.get('rows', [])[:3] if vision_result.get('rows') else [],
-                    'metadata': vision_result.get('metadata', {})
-                }
-                vision_warnings.append(
-                    f"DEBUG - Lehekülg {page_num+1}:\n```json\n{debug_json.dumps(vision_result_debug, indent=2, ensure_ascii=False)}\n```"
-                )
-
-                if vision_result['success']:
-                    # Collect metadata ALWAYS (even if no rows extracted)
-                    metadata = vision_result.get('metadata', {})
-
-                    # Track number of tables found
-                    if metadata.get('tables_found'):
-                        vision_tables_count += metadata['tables_found']
-                        vision_warnings.append(
-                            f"Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit"
-                        )
-
-                    # Only process rows if they exist
-                    if vision_result.get('rows'):
-                        used_vision_api = True
-                        all_vision_data.extend(vision_result['rows'])
-
-                        # Collect columns (from first successful extraction)
-                        if not all_columns and vision_result.get('columns'):
-                            all_columns = vision_result['columns']
-
-                        # Additional metadata warnings
-                        if metadata.get('calculated_fields'):
-                            vision_warnings.append(
-                                f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
-                            )
-                        if metadata.get('unreadable_fields'):
-                            vision_warnings.append(
-                                f"Lehekülg {page_num+1}: Loetamatud väljad: {', '.join(metadata['unreadable_fields'])}"
-                            )
-
-                        vision_warnings.append(
-                            f"Lehekülg {page_num+1}: Ekstraheeritud {len(vision_result['rows'])} rida"
-                        )
-                    else:
-                        # Warn if tables found but no rows extracted
-                        if metadata.get('tables_found', 0) > 0:
-                            vision_warnings.append(
-                                f"⚠️ Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit, "
-                                f"aga ühtegi rida ei ekstraheeritud! AI ei suutnud tabeleid lugeda."
-                            )
-                else:
-                    # Vision API failed
-                    error_msg = vision_result.get('metadata', {}).get('error', 'Tundmatu viga')
+                # Track number of tables found
+                if metadata.get('tables_found'):
+                    vision_tables_count += metadata['tables_found']
                     vision_warnings.append(
-                        f"❌ Lehekülg {page_num+1}: Vision API ebaõnnestus - {error_msg}"
+                        f"Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit"
                     )
 
-        # Step 4: Fallback to OCR + text parsing if vision failed
-        if not all_tables and not all_vision_data:
-            ocr_results = ocr_pdf_all_pages(pdf_bytes)
+                # Only process rows if they exist
+                if vision_result.get('rows'):
+                    all_vision_data.extend(vision_result['rows'])
 
-            for page_num, ocr_text in ocr_results:
-                # Try rule-based text parsing
-                parsed_table = parse_table_from_text(ocr_text)
-                if parsed_table is not None:
-                    all_tables.append(parsed_table)
+                    # Collect columns (from first successful extraction)
+                    if not all_columns and vision_result.get('columns'):
+                        all_columns = vision_result['columns']
 
-        # Step 5: Merge tables or use vision data
-        if all_vision_data:
-            # Vision API gave us complete table structure
-            # Check if standard fields exist for validation
-            has_standard_fields = all_columns and all(
-                field in all_columns for field in ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
-            )
+                    # Additional metadata warnings
+                    if metadata.get('calculated_fields'):
+                        vision_warnings.append(
+                            f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
+                        )
+                    if metadata.get('unreadable_fields'):
+                        vision_warnings.append(
+                            f"Lehekülg {page_num+1}: Loetamatud väljad: {', '.join(metadata['unreadable_fields'])}"
+                        )
 
-            if has_standard_fields:
-                # We have standard fields, can validate
-                validation_result = validate_file_data(all_vision_data, None)
-                if vision_warnings:
-                    validation_result['warnings'].extend(vision_warnings)
-
-                # If validation rejected all rows, show everything anyway (Vision API mode)
-                if not validation_result['valid_data'] and all_vision_data:
-                    validation_result['warnings'].append(
-                        f"⚠️ Standardväljad leitud, aga valideerimise käigus kõik read tagasi lükatud. "
-                        f"Näitan kõiki andmeid ilma valideerimiseta."
+                    vision_warnings.append(
+                        f"Lehekülg {page_num+1}: Ekstraheeritud {len(vision_result['rows'])} rida"
                     )
-                    validation_result = {
-                        'valid_data': all_vision_data,
-                        'warnings': validation_result['warnings'],
-                        'total_hours': 0.0,
-                        'valid_row_count': len(all_vision_data),
-                        'invalid_row_count': 0
-                    }
+                else:
+                    # Warn if tables found but no rows extracted
+                    if metadata.get('tables_found', 0) > 0:
+                        vision_warnings.append(
+                            f"⚠️ Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit, "
+                            f"aga ühtegi rida ei ekstraheeritud! AI ei suutnud tabeleid lugeda."
+                        )
             else:
-                # No standard fields, skip validation
+                # Vision API failed
+                error_msg = vision_result.get('metadata', {}).get('error', 'Tundmatu viga')
+                vision_warnings.append(
+                    f"❌ Lehekülg {page_num+1}: Vision API ebaõnnestus - {error_msg}"
+                )
+
+        # Step 4: Process extracted data
+        if not all_vision_data:
+            # No data extracted
+            return {
+                'filename': filename,
+                'success': False,
+                'error': 'Vision API ei suutnud ühtegi rida ekstraheerida.',
+                'data': [],
+                'columns': all_columns,
+                'warnings': vision_warnings,
+                'page_count': ingest_result['page_count'],
+                'tables_found': vision_tables_count,
+                'used_vision_api': True,
+                'total_hours': 0.0,
+                'valid_row_count': 0,
+                'invalid_row_count': 0,
+                'ai_cost': 0.0,
+                'ai_tokens': 0
+            }
+
+        # Check if standard fields exist for validation
+        has_standard_fields = all_columns and all(
+            field in all_columns for field in ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
+        )
+
+        if has_standard_fields:
+            # We have standard fields, can validate
+            validation_result = validate_file_data(all_vision_data, None)
+            if vision_warnings:
+                validation_result['warnings'].extend(vision_warnings)
+
+            # If validation rejected all rows, show everything anyway (Vision API mode)
+            if not validation_result['valid_data'] and all_vision_data:
+                validation_result['warnings'].append(
+                    f"⚠️ Standardväljad leitud, aga valideerimise käigus kõik read tagasi lükatud. "
+                    f"Näitan kõiki andmeid ilma valideerimiseta."
+                )
                 validation_result = {
                     'valid_data': all_vision_data,
-                    'warnings': vision_warnings.copy() if vision_warnings else [],
+                    'warnings': validation_result['warnings'],
                     'total_hours': 0.0,
                     'valid_row_count': len(all_vision_data),
                     'invalid_row_count': 0
                 }
-
-            # Add table structure info
-            table_columns = all_columns
-            table_data = validation_result['valid_data']  # Use validated data
-
         else:
-            # Traditional pipeline: merge tables → normalize
-            merged_table = merge_tables(all_tables) if all_tables else pd.DataFrame()
-
-            # DEBUG: Log merged table info
-            if not merged_table.empty:
-                vision_warnings.append(
-                    f"DEBUG - Merged table: {len(merged_table)} rida, {len(merged_table.columns)} veergu"
-                )
-                vision_warnings.append(
-                    f"DEBUG - Veergude nimed: {list(merged_table.columns)}"
-                )
-                # Show first few rows
-                sample_data = merged_table.head(3).to_dict('records')
-                vision_warnings.append(
-                    f"DEBUG - Esimesed read:\n```json\n{debug_json.dumps(sample_data, indent=2, ensure_ascii=False)}\n```"
-                )
-
-            # AI-enhanced normalization if available
-            if provider and provider.name != "Pole (ainult reeglid)" and not merged_table.empty:
-                merged_table = provider.normalize_table(merged_table, context=f"Work hours from {filename}")
-
-            normalized_data = normalize_dataframe(merged_table)
-
-            # DEBUG: Log normalization results
-            vision_warnings.append(
-                f"DEBUG - Normaliseerimise tulemus: {len(normalized_data)} rida"
-            )
-            if normalized_data:
-                vision_warnings.append(
-                    f"DEBUG - Normaliseeritud read (näidis):\n```json\n{debug_json.dumps(normalized_data[:3], indent=2, ensure_ascii=False)}\n```"
-                )
-
-            # Find expected total (if present)
-            expected_total = find_total_row(merged_table) if not merged_table.empty else None
-
-            # Validate
-            validation_result = validate_file_data(normalized_data, expected_total)
-
-            # DEBUG: Log validation results
-            vision_warnings.append(
-                f"DEBUG - Valideerimise tulemus: {validation_result['valid_row_count']} kehtivat, "
-                f"{validation_result['invalid_row_count']} kehtetut rida"
-            )
-
-            # Add vision warnings even in traditional path (if Vision API was tried but failed)
-            if vision_warnings:
-                validation_result['warnings'].extend(vision_warnings)
-
-            # For traditional path, columns are standard fields
-            table_columns = ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
-            table_data = validation_result['valid_data']
+            # No standard fields, skip validation
+            validation_result = {
+                'valid_data': all_vision_data,
+                'warnings': vision_warnings.copy() if vision_warnings else [],
+                'total_hours': 0.0,
+                'valid_row_count': len(all_vision_data),
+                'invalid_row_count': 0
+            }
 
         # Calculate cost for this file
         file_cost = 0.0
@@ -267,10 +214,10 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'filename': filename,
             'success': True,
             'page_count': ingest_result['page_count'],
-            'tables_found': vision_tables_count if used_vision_api else len(all_tables),
-            'used_vision_api': used_vision_api,
-            'columns': table_columns,
-            'data': table_data,
+            'tables_found': vision_tables_count,
+            'used_vision_api': True,
+            'columns': all_columns,
+            'data': validation_result['valid_data'],
             'warnings': validation_result['warnings'],
             'total_hours': validation_result['total_hours'],
             'valid_row_count': validation_result['valid_row_count'],
@@ -311,41 +258,40 @@ def main():
         st.header("⚙️ Seaded")
 
         # AI Provider selection
-        st.subheader("AI teenusepakkuja")
+        st.subheader("AI teenusepakkuja (NÕUTAV)")
         provider_options = {
-            "Pole (ainult reeglid)": "none",
+            "Gemini (Google)": "gemini",
             "ChatGPT (OpenAI)": "openai",
             "Grok (xAI)": "grok",
-            "Kimi (Moonshot)": "kimi",
-            "Gemini (Google)": "gemini"
+            "Kimi (Moonshot)": "kimi"
         }
 
         selected_provider_name = st.selectbox(
             "Vali teenusepakkuja:",
             options=list(provider_options.keys()),
-            index=0
+            index=0,
+            help="AI Vision API on nõutav PDF-ide töötlemiseks. Rule-based meetodid on eemaldatud."
         )
 
         provider_type = provider_options[selected_provider_name]
 
-        # API Key input (if needed)
-        api_key = None
-        if provider_type != "none":
-            api_key = st.text_input(
-                f"API võti ({selected_provider_name}):",
-                type="password",
-                help="API võti salvestatakse st.secrets failis tootmisversioonis"
-            )
+        # API Key input (always required)
+        api_key = st.text_input(
+            f"API võti ({selected_provider_name}):",
+            type="password",
+            help="API võti salvestatakse st.secrets failis tootmisversioonis"
+        )
 
-            # Try to get from secrets if not provided
-            if not api_key:
-                secret_key = f"{provider_type}_api_key".upper()
-                api_key = st.secrets.get(secret_key, None)
+        # Try to get from secrets if not provided
+        if not api_key:
+            secret_key = f"{provider_type}_api_key".upper()
+            api_key = st.secrets.get(secret_key, None)
 
         st.divider()
 
         st.subheader("ℹ️ Info")
         st.info(
+            "**Meetod:** AI Vision API ainult\n\n"
             "**Maksimaalne lehekülgede arv:** 10\n\n"
             "**Toetatud vormingud:** PDF\n\n"
             "**Väljund:** XLSX (Excel)"
@@ -381,13 +327,18 @@ def main():
             st.info(f"Laaditud failid: {len(uploaded_files)}")
 
             if st.button("🚀 Töötle failid", type="primary"):
-                # Create provider
+                # Create provider (always required)
                 provider = None
-                if provider_type != "none" and api_key:
+                if not api_key:
+                    st.error("❌ AI API võti on nõutav! Palun sisesta API võti külgpaneelil.")
+                else:
                     try:
                         provider = create_provider(provider_type, api_key)
                     except Exception as e:
                         st.error(f"Viga teenusepakkuja loomisel: {str(e)}")
+
+                if not provider:
+                    st.stop()
 
                 # Prepare files for processing
                 files_to_process = [
@@ -409,13 +360,13 @@ def main():
                 # Display results
                 st.success(f"✅ Töödeldud {len(results)} faili")
 
-                # Show AI cost summary if provider was used
-                if provider and provider.name != "Pole (ainult reeglid)":
+                # Show AI cost summary
+                if provider:
                     metrics = provider.get_metrics()
                     if metrics['total_tokens'] > 0:
                         st.info(f"💰 **AI kulu kokku:** €{metrics['total_cost_eur']:.4f} | 🎯 **Tokenit:** {metrics['total_tokens']:,}")
                     else:
-                        st.warning("⚠️ AI teenusepakkuja valitud, aga API päringuid ei tehtud. Kontrolli API võtit või kas failidest leiti tabeleid.")
+                        st.warning("⚠️ API päringuid ei tehtud. Kontrolli API võtit.")
 
 
                 # Show per-file results
@@ -430,14 +381,13 @@ def main():
                             # Show tables found
                             st.caption(f"📊 Tabeleid leitud: {result.get('tables_found', 0)}")
 
-                            # Show AI cost per file if available
-                            if provider and provider.name != "Pole (ainult reeglid)":
-                                ai_tokens = result.get('ai_tokens', 0)
-                                ai_cost = result.get('ai_cost', 0.0)
-                                if ai_tokens > 0:
-                                    st.caption(f"💰 AI kulu: €{ai_cost:.4f} | 🎯 Tokenit: {ai_tokens:,}")
-                                else:
-                                    st.caption(f"⚠️ AI-d ei kasutatud (tabeleid ei leitud või viga)")
+                            # Show AI cost per file
+                            ai_tokens = result.get('ai_tokens', 0)
+                            ai_cost = result.get('ai_cost', 0.0)
+                            if ai_tokens > 0:
+                                st.caption(f"💰 AI kulu: €{ai_cost:.4f} | 🎯 Tokenit: {ai_tokens:,}")
+                            else:
+                                st.caption(f"⚠️ AI-d ei kasutatud (viga)")
 
                             # Warnings
                             if result.get('warnings'):
