@@ -1,13 +1,15 @@
 """
 Streamlit PDF OCR Application
 Eesti keeles (Estonian language UI)
-Version 1.0
 """
 
 import streamlit as st
 import pandas as pd
 from typing import List, Dict, Any
 import io
+
+# Version
+__version__ = "1.1.0"
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -129,7 +131,7 @@ def main():
     """Main Streamlit application."""
 
     st.title("📄 PDF OCR - Töötundide töötlemine")
-    st.markdown("*Tööajaandmete ekstraheerimine PDF-failidest*")
+    st.markdown(f"*Tööajaandmete ekstraheerimine PDF-failidest* • `v{__version__}`")
 
     # Sidebar for settings
     with st.sidebar:
