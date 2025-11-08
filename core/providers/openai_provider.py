@@ -272,7 +272,22 @@ CRITICAL:
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0].strip()
 
-            result = json.loads(content)
+            try:
+                result = json.loads(content)
+            except json.JSONDecodeError as e:
+                # JSON parsing failed - return error with raw response for debugging
+                latency = time.time() - start_time
+                self._track_call(latency)
+                return {
+                    'columns': [],
+                    'rows': [],
+                    'metadata': {
+                        'error': f'JSON parsing failed: {str(e)}',
+                        'raw_response': content[:500]  # First 500 chars for debugging
+                    },
+                    'formatting': {},
+                    'success': False
+                }
 
             # Update metadata with total counts
             metadata = result.get('metadata', {})
