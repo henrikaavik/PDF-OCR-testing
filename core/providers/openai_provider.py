@@ -168,17 +168,18 @@ Return the cleaned text without explanations."""
         # Encode image to base64
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
-        prompt = """Analyze this table/timesheet image and extract the COMPLETE table structure with ALL columns and rows.
+        prompt = """Analyze this image and find ALL tables present. Extract data from EVERY table you see.
 
 CRITICAL RULES:
-1. First identify ALL column headers in the table
-2. Extract EVERY cell value that is CLEARLY VISIBLE
-3. If a cell is UNREADABLE or BLANK, use "UNREADABLE" as the value
-4. If you can CALCULATE a missing value from other visible data (e.g., sum total), you MAY calculate it
-5. NEVER invent or guess data that isn't visible or calculable
-6. Preserve the exact table structure (all columns, all rows)
-7. For dates: use format dd.mm.yyyy (convert if needed)
-8. For numbers: use numeric values, rounded to 2 decimals
+1. Find ALL tables on this page/image (there may be multiple tables)
+2. For each table, identify ALL column headers
+3. Extract EVERY cell value that is CLEARLY VISIBLE from ALL tables
+4. If a cell is UNREADABLE or BLANK, use "UNREADABLE" as the value
+5. If you can CALCULATE a missing value from other visible data (e.g., sum total), you MAY calculate it
+6. NEVER invent or guess data that isn't visible or calculable
+7. Combine rows from ALL tables into one list (preserve column structure)
+8. For dates: use format dd.mm.yyyy (convert if needed)
+9. For numbers: use numeric values, rounded to 2 decimals
 
 Return ONLY this JSON structure (no explanations):
 {
@@ -192,15 +193,19 @@ Return ONLY this JSON structure (no explanations):
     "unreadable_fields": [],
     "warnings": [],
     "total_columns": 0,
-    "total_rows": 0
+    "total_rows": 0,
+    "tables_found": 0
   }
 }
 
 IMPORTANT:
-- Extract ALL columns you see, not just specific fields
-- Each row must have values for ALL columns (use "UNREADABLE" for empty/unclear cells)
+- If multiple tables have different columns, include ALL unique columns in the "columns" array
+- For rows from tables that don't have certain columns, use "UNREADABLE" for missing columns
+- Extract ALL columns from ALL tables
+- Each row must have values for ALL columns (use "UNREADABLE" for columns not present in that table)
 - If you calculated a field, add "row_X_column_name" to calculated_fields
 - If a field was unreadable, add "row_X_column_name" to unreadable_fields
+- Set "tables_found" to the number of distinct tables you found on this page
 """
 
         start_time = time.time()
