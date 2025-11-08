@@ -1,6 +1,6 @@
 """
-Streamlit PDF OCR Application
-Eesti keeles (Estonian language UI)
+Streamlit PDF Table Extraction Application
+Universal PDF to XLSX converter using AI Vision APIs
 """
 
 import streamlit as st
@@ -9,36 +9,33 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "2.1.2"  # Bug fix: Show warnings even when processing fails
+__version__ = "3.0.0"  # Universal PDF table extractor - major refactor
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
 from core.ocr import pdf_to_images
-from core.validate import validate_file_data
-from core.aggregate import aggregate_multiple_files, get_quarter_summary_text
 from core.providers.base import create_provider
 
 # Utils imports
-from utils.io import create_per_file_xlsx, create_quarterly_xlsx
-from utils.parallel import process_files_parallel
+from utils.io import create_per_file_xlsx
 
 
 # Page configuration
 st.set_page_config(
-    page_title="PDF OCR - Töötundide töötlemine",
-    page_icon="📄",
+    page_title="PDF Table Extractor",
+    page_icon="📊",
     layout="wide"
 )
 
 
-def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[str, Any]:
+def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, Any]:
     """
-    Process a single PDF file using AI Vision API only.
+    Process a single PDF file using AI Vision API.
 
     Args:
         filename: Original filename
         pdf_bytes: PDF file bytes
-        provider: AI provider (required)
+        provider: AI provider instance
 
     Returns:
         Processing result dictionary
@@ -52,28 +49,16 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         tokens_before = metrics['total_tokens']
 
     try:
-        # Step 1: Ingest and validate page count
+        # Step 1: Ingest (page count check only)
         ingest_result = ingest_pdf(pdf_bytes, filename)
 
-        # Step 2: Check if AI provider is available
-        if not provider or provider.name == "Pole (ainult reeglid)":
-            return {
-                'filename': filename,
-                'success': False,
-                'error': 'AI teenusepakkuja on nõutav. Palun vali AI teenusepakkuja (ChatGPT, Grok, Kimi või Gemini).',
-                'data': [],
-                'columns': [],
-                'formatting': {},
-                'warnings': ['AI teenusepakkuja puudub. Rule-based meetodid on eemaldatud.']
-            }
+        # Step 2: Convert to images
+        images = pdf_to_images(pdf_bytes)
 
-        # Step 3: Use VISION API to extract tables
-        import json as debug_json
-
-        all_vision_data = []
+        # Step 3: Extract with Vision API
+        all_data = []
         all_columns = []
-        vision_warnings = []
-        vision_tables_count = 0
+        tables_found = 0
         combined_formatting = {
             'merged_cells': [],
             'cell_borders': {},
@@ -82,9 +67,6 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'bold_cells': []
         }
 
-        # Convert PDF pages to images
-        images = pdf_to_images(pdf_bytes)
-
         for page_num, image in enumerate(images):
             # Convert PIL Image to bytes
             img_byte_arr = io.BytesIO()
@@ -92,39 +74,28 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             image_bytes = img_byte_arr.getvalue()
 
             # Extract from image using Vision API
-            vision_result = provider.extract_table_from_image(
+            result = provider.extract_table_from_image(
                 image_bytes,
                 context=f"{filename} page {page_num+1}"
             )
 
-            # DEBUG: Always log what Vision API returned
-            vision_result_debug = {
-                'success': vision_result.get('success'),
-                'rows_count': len(vision_result.get('rows', [])),
-                'columns_count': len(vision_result.get('columns', [])),
-                'columns': vision_result.get('columns', []),
-                'rows_sample': vision_result.get('rows', [])[:3] if vision_result.get('rows') else [],
-                'metadata': vision_result.get('metadata', {})
-            }
-            vision_warnings.append(
-                f"DEBUG - Lehekülg {page_num+1}:\n```json\n{debug_json.dumps(vision_result_debug, indent=2, ensure_ascii=False)}\n```"
-            )
+            if result['success']:
+                # Collect rows
+                if result.get('rows'):
+                    all_data.extend(result['rows'])
 
-            if vision_result['success']:
-                # Collect metadata ALWAYS (even if no rows extracted)
-                metadata = vision_result.get('metadata', {})
+                # Collect columns (from first page)
+                if not all_columns and result.get('columns'):
+                    all_columns = result['columns']
 
-                # Track number of tables found
+                # Track tables found
+                metadata = result.get('metadata', {})
                 if metadata.get('tables_found'):
-                    vision_tables_count += metadata['tables_found']
-                    vision_warnings.append(
-                        f"Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit"
-                    )
+                    tables_found += metadata['tables_found']
 
-                # Collect formatting metadata from this page
-                page_formatting = vision_result.get('formatting', {})
+                # Merge formatting
+                page_formatting = result.get('formatting', {})
                 if page_formatting:
-                    # Merge formatting from this page into combined formatting
                     if page_formatting.get('merged_cells'):
                         combined_formatting['merged_cells'].extend(page_formatting['merged_cells'])
                     if page_formatting.get('cell_borders'):
@@ -136,104 +107,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                     if page_formatting.get('bold_cells'):
                         combined_formatting['bold_cells'].extend(page_formatting['bold_cells'])
 
-                    vision_warnings.append(
-                        f"Lehekülg {page_num+1}: Leitud vormindus - "
-                        f"Ühendatud lahtrid: {len(page_formatting.get('merged_cells', []))}, "
-                        f"Piirjooned: {len(page_formatting.get('cell_borders', {}))}, "
-                        f"Paksud lahtrid: {len(page_formatting.get('bold_cells', []))}"
-                    )
-
-                # Only process rows if they exist
-                if vision_result.get('rows'):
-                    all_vision_data.extend(vision_result['rows'])
-
-                    # Collect columns (from first successful extraction)
-                    if not all_columns and vision_result.get('columns'):
-                        all_columns = vision_result['columns']
-
-                    # Additional metadata warnings
-                    if metadata.get('calculated_fields'):
-                        vision_warnings.append(
-                            f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
-                        )
-                    if metadata.get('unreadable_fields'):
-                        vision_warnings.append(
-                            f"Lehekülg {page_num+1}: Loetamatud väljad: {', '.join(metadata['unreadable_fields'])}"
-                        )
-
-                    vision_warnings.append(
-                        f"Lehekülg {page_num+1}: Ekstraheeritud {len(vision_result['rows'])} rida"
-                    )
-                else:
-                    # Warn if tables found but no rows extracted
-                    if metadata.get('tables_found', 0) > 0:
-                        vision_warnings.append(
-                            f"⚠️ Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit, "
-                            f"aga ühtegi rida ei ekstraheeritud! AI ei suutnud tabeleid lugeda."
-                        )
-            else:
-                # Vision API failed
-                error_msg = vision_result.get('metadata', {}).get('error', 'Tundmatu viga')
-                vision_warnings.append(
-                    f"❌ Lehekülg {page_num+1}: Vision API ebaõnnestus - {error_msg}"
-                )
-
-        # Step 4: Process extracted data
-        if not all_vision_data:
-            # No data extracted
-            return {
-                'filename': filename,
-                'success': False,
-                'error': 'Vision API ei suutnud ühtegi rida ekstraheerida.',
-                'data': [],
-                'columns': all_columns,
-                'formatting': combined_formatting,
-                'warnings': vision_warnings,
-                'page_count': ingest_result['page_count'],
-                'tables_found': vision_tables_count,
-                'used_vision_api': True,
-                'total_hours': 0.0,
-                'valid_row_count': 0,
-                'invalid_row_count': 0,
-                'ai_cost': 0.0,
-                'ai_tokens': 0
-            }
-
-        # Check if standard fields exist for validation
-        has_standard_fields = all_columns and all(
-            field in all_columns for field in ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
-        )
-
-        if has_standard_fields:
-            # We have standard fields, can validate
-            validation_result = validate_file_data(all_vision_data, None)
-            if vision_warnings:
-                validation_result['warnings'].extend(vision_warnings)
-
-            # If validation rejected all rows, show everything anyway (Vision API mode)
-            if not validation_result['valid_data'] and all_vision_data:
-                validation_result['warnings'].append(
-                    f"⚠️ Standardväljad leitud, aga valideerimise käigus kõik read tagasi lükatud. "
-                    f"Näitan kõiki andmeid ilma valideerimiseta."
-                )
-                validation_result = {
-                    'valid_data': all_vision_data,
-                    'warnings': validation_result['warnings'],
-                    'total_hours': 0.0,
-                    'valid_row_count': len(all_vision_data),
-                    'invalid_row_count': 0
-                }
-        else:
-            # No standard fields, skip validation
-            validation_result = {
-                'valid_data': all_vision_data,
-                'warnings': vision_warnings.copy() if vision_warnings else [],
-                'total_hours': 0.0,
-                'valid_row_count': len(all_vision_data),
-                'invalid_row_count': 0
-            }
-
-        # Calculate cost for this file
+        # Step 4: Calculate cost
         file_cost = 0.0
         file_tokens = 0
         if provider:
@@ -241,21 +115,19 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             file_cost = metrics['total_cost_eur'] - cost_before
             file_tokens = metrics['total_tokens'] - tokens_before
 
+        # Step 5: Return (NO VALIDATION)
         return {
             'filename': filename,
-            'success': True,
+            'success': len(all_data) > 0,
             'page_count': ingest_result['page_count'],
-            'tables_found': vision_tables_count,
-            'used_vision_api': True,
+            'tables_found': tables_found,
+            'rows_extracted': len(all_data),
             'columns': all_columns,
-            'data': validation_result['valid_data'],
+            'data': all_data,
             'formatting': combined_formatting,
-            'warnings': validation_result['warnings'],
-            'total_hours': validation_result['total_hours'],
-            'valid_row_count': validation_result['valid_row_count'],
-            'invalid_row_count': validation_result['invalid_row_count'],
             'ai_cost': file_cost,
-            'ai_tokens': file_tokens
+            'ai_tokens': file_tokens,
+            'error': None if len(all_data) > 0 else 'No data extracted'
         }
 
     except PageLimitExceededError as e:
@@ -265,8 +137,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'error': str(e),
             'data': [],
             'columns': [],
-            'formatting': {},
-            'warnings': [str(e)]
+            'formatting': {}
         }
 
     except Exception as e:
@@ -276,23 +147,22 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'error': str(e),
             'data': [],
             'columns': [],
-            'formatting': {},
-            'warnings': [f"Viga faili töötlemisel: {str(e)}"]
+            'formatting': {}
         }
 
 
 def main():
     """Main Streamlit application."""
 
-    st.title("📄 PDF OCR - Töötundide töötlemine")
-    st.markdown(f"*Tööajaandmete ekstraheerimine PDF-failidest* • `v{__version__}`")
+    st.title("📊 PDF Tabeli Konverter")
+    st.markdown(f"*Ekstraheeri tabeleid PDF-idest ja ekspordi XLSX-iks* • `v{__version__}`")
 
     # Sidebar for settings
     with st.sidebar:
         st.header("⚙️ Seaded")
 
         # AI Provider selection
-        st.subheader("AI teenusepakkuja (NÕUTAV)")
+        st.subheader("AI teenusepakkuja")
         provider_options = {
             "Gemini (Google)": "gemini",
             "ChatGPT (OpenAI)": "openai",
@@ -304,12 +174,12 @@ def main():
             "Vali teenusepakkuja:",
             options=list(provider_options.keys()),
             index=0,
-            help="AI Vision API on nõutav PDF-ide töötlemiseks. Rule-based meetodid on eemaldatud."
+            help="AI Vision API ekstraheerib tabeleid PDF-ist"
         )
 
         provider_type = provider_options[selected_provider_name]
 
-        # API Key input (always required)
+        # API Key input
         api_key = st.text_input(
             f"API võti ({selected_provider_name}):",
             type="password",
@@ -325,7 +195,7 @@ def main():
 
         st.subheader("ℹ️ Info")
         st.info(
-            "**Meetod:** AI Vision API ainult\n\n"
+            "**Meetod:** AI Vision API\n\n"
             "**Maksimaalne lehekülgede arv:** 10\n\n"
             "**Toetatud vormingud:** PDF\n\n"
             "**Väljund:** XLSX (Excel)"
@@ -345,200 +215,88 @@ def main():
             # Rerun the app
             st.rerun()
 
-    # Main content
-    tab1, tab2, tab3 = st.tabs(["📤 Lae üles", "📊 Kvartaliaruanne", "🔍 Võrdlus"])
+    # Main content (single tab)
+    uploaded_files = st.file_uploader(
+        "Vali üks või mitu PDF-faili (maksimaalselt 10 lehekülge faili kohta):",
+        type=['pdf'],
+        accept_multiple_files=True
+    )
 
-    with tab1:
-        st.header("Laadi üles PDF-failid")
+    if uploaded_files:
+        st.info(f"Laaditud failid: {len(uploaded_files)}")
 
-        uploaded_files = st.file_uploader(
-            "Vali üks või mitu PDF-faili (maksimaalselt 10 lehekülge faili kohta):",
-            type=['pdf'],
-            accept_multiple_files=True
-        )
-
-        if uploaded_files:
-            st.info(f"Laaditud failid: {len(uploaded_files)}")
-
-            if st.button("🚀 Töötle failid", type="primary"):
-                # Create provider (always required)
-                provider = None
-                if not api_key:
-                    st.error("❌ AI API võti on nõutav! Palun sisesta API võti külgpaneelil.")
-                else:
-                    try:
-                        provider = create_provider(provider_type, api_key)
-                    except Exception as e:
-                        st.error(f"Viga teenusepakkuja loomisel: {str(e)}")
-
-                if not provider:
-                    st.stop()
-
-                # Prepare files for processing
-                files_to_process = [
-                    (file.name, file.getvalue())
-                    for file in uploaded_files
-                ]
-
-                # Process files
-                with st.spinner("Töötlen faile..."):
-                    results = []
-                    for filename, file_bytes in files_to_process:
-                        result = process_single_pdf(filename, file_bytes, provider)
-                        results.append(result)
-
-                # Store results in session state
-                st.session_state['results'] = results
-                st.session_state['provider'] = provider
-
-                # Display results
-                st.success(f"✅ Töödeldud {len(results)} faili")
-
-                # Show AI cost summary
-                if provider:
-                    metrics = provider.get_metrics()
-                    if metrics['total_tokens'] > 0:
-                        st.info(f"💰 **AI kulu kokku:** €{metrics['total_cost_eur']:.4f} | 🎯 **Tokenit:** {metrics['total_tokens']:,}")
-                    else:
-                        st.warning("⚠️ API päringuid ei tehtud. Kontrolli API võtit.")
-
-
-                # Show per-file results
-                for result in results:
-                    with st.expander(f"📄 {result['filename']}", expanded=True):
-                        if result['success']:
-                            col1, col2, col3 = st.columns(3)
-                            col1.metric("Lehekülgi", result.get('page_count', 0))
-                            col2.metric("Kehtivaid ridu", result.get('valid_row_count', 0))
-                            col3.metric("Tunde kokku", f"{result.get('total_hours', 0):.2f}")
-
-                            # Show tables found
-                            st.caption(f"📊 Tabeleid leitud: {result.get('tables_found', 0)}")
-
-                            # Show AI cost per file
-                            ai_tokens = result.get('ai_tokens', 0)
-                            ai_cost = result.get('ai_cost', 0.0)
-                            if ai_tokens > 0:
-                                st.caption(f"💰 AI kulu: €{ai_cost:.4f} | 🎯 Tokenit: {ai_tokens:,}")
-                            else:
-                                st.caption(f"⚠️ AI-d ei kasutatud (viga)")
-
-                            # Warnings
-                            if result.get('warnings'):
-                                st.warning("⚠️ Hoiatused:")
-                                for warning in result['warnings']:
-                                    st.write(f"- {warning}")
-
-                            # Data preview
-                            if result.get('data'):
-                                st.subheader("Andmete eelvaade")
-                                df = pd.DataFrame(result['data'])
-                                st.dataframe(df, use_container_width=True)
-
-                                # Download per-file XLSX
-                                xlsx_bytes = create_per_file_xlsx(
-                                    result['data'],
-                                    result['filename'],
-                                    result.get('columns'),  # Pass columns if available
-                                    result.get('formatting')  # Pass formatting if available
-                                )
-                                st.download_button(
-                                    label="⬇️ Laadi alla XLSX",
-                                    data=xlsx_bytes,
-                                    file_name=f"{result['filename']}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                )
-                        else:
-                            st.error(f"❌ {result.get('error', 'Tundmatu viga')}")
-
-                            # Show warnings even on failure (for debugging)
-                            if result.get('warnings'):
-                                st.warning("⚠️ Hoiatused (debug info):")
-                                for warning in result['warnings']:
-                                    st.write(f"- {warning}")
-
-    with tab2:
-        st.header("Kvartaliaruanne")
-
-        if 'results' in st.session_state:
-            results = st.session_state['results']
-
-            # Aggregate
-            aggregated = aggregate_multiple_files(results)
-
-            if aggregated['total_rows'] > 0:
-                # Summary
-                st.subheader("Kokkuvõte")
-                summary_text = get_quarter_summary_text(
-                    aggregated['quarters'],
-                    aggregated['total_hours'],
-                    aggregated['total_rows']
-                )
-                st.info(summary_text)
-
-                # Pivot table
-                st.subheader("Koondtabel (Töötaja × Projekt × Kuu)")
-                st.dataframe(aggregated['pivot'], use_container_width=True)
-
-                # Download quarterly report
-                quarterly_xlsx = create_quarterly_xlsx(
-                    aggregated['all_data'],
-                    aggregated['pivot']
-                )
-
-                st.download_button(
-                    label="⬇️ Laadi alla kvartaliaruanne (XLSX)",
-                    data=quarterly_xlsx,
-                    file_name="kvartaliaruanne.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
+        if st.button("🚀 Töötle failid", type="primary"):
+            # Create provider
+            provider = None
+            if not api_key:
+                st.error("❌ AI API võti on nõutav! Palun sisesta API võti külgpaneelil.")
             else:
-                st.warning("Andmed puuduvad. Palun töötle esmalt faile.")
-        else:
-            st.info("Andmed puuduvad. Palun töötle esmalt faile vahekaardil 'Lae üles'.")
+                try:
+                    provider = create_provider(provider_type, api_key)
+                except Exception as e:
+                    st.error(f"Viga teenusepakkuja loomisel: {str(e)}")
 
-    with tab3:
-        st.header("AI teenusepakkujate võrdlus")
+            if not provider:
+                st.stop()
 
-        if 'provider' in st.session_state and st.session_state['provider']:
-            provider = st.session_state['provider']
+            # Prepare files for processing
+            files_to_process = [
+                (file.name, file.getvalue())
+                for file in uploaded_files
+            ]
 
-            # Get metrics
-            metrics = provider.get_metrics()
+            # Process files
+            with st.spinner("Töötlen faile..."):
+                results = []
+                for filename, file_bytes in files_to_process:
+                    result = process_single_pdf(filename, file_bytes, provider)
+                    results.append(result)
 
-            st.subheader(f"Teenusepakkuja: {metrics['name']}")
+            # Display results
+            st.success(f"✅ Töödeldud {len(results)} faili")
 
-            # Performance metrics
-            col1, col2, col3 = st.columns(3)
-            col1.metric("API päringud", metrics['calls'])
-            col2.metric("Kogu latentsus (s)", f"{metrics['total_latency']:.3f}")
-            col3.metric("Keskmine latentsus (s)", f"{metrics['avg_latency']:.3f}")
+            # Show AI cost summary
+            if provider:
+                metrics = provider.get_metrics()
+                if metrics['total_tokens'] > 0:
+                    st.info(f"💰 **AI kulu kokku:** €{metrics['total_cost_eur']:.4f} | 🎯 **Tokenit:** {metrics['total_tokens']:,}")
 
-            # Cost metrics
-            st.divider()
-            st.subheader("💰 Kulud")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🎯 Tokenit kokku", f"{metrics['total_tokens']:,}")
-            col2.metric("💰 Kulu (EUR)", f"€{metrics['total_cost_eur']:.4f}")
+            # Show per-file results
+            for result in results:
+                with st.expander(f"📄 {result['filename']}", expanded=True):
+                    if result['success']:
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Lehekülgi", result.get('page_count', 0))
+                        col2.metric("Ridu ekstraheeritud", result.get('rows_extracted', 0))
+                        col3.metric("Tabeleid leitud", result.get('tables_found', 0))
 
-            # Calculate accuracy
-            if 'results' in st.session_state:
-                total_rows = sum(r.get('valid_row_count', 0) + r.get('invalid_row_count', 0)
-                               for r in st.session_state['results'])
-                valid_rows = sum(r.get('valid_row_count', 0)
-                               for r in st.session_state['results'])
+                        # Show AI cost per file
+                        ai_tokens = result.get('ai_tokens', 0)
+                        ai_cost = result.get('ai_cost', 0.0)
+                        if ai_tokens > 0:
+                            st.caption(f"💰 AI kulu: €{ai_cost:.4f} | 🎯 Tokenit: {ai_tokens:,}")
 
-                accuracy = (valid_rows / total_rows * 100) if total_rows > 0 else 0
+                        # Data preview
+                        if result.get('data'):
+                            st.subheader("Andmete eelvaade")
+                            df = pd.DataFrame(result['data'])
+                            st.dataframe(df, use_container_width=True)
 
-                col3.metric("Täpsus", f"{accuracy:.1f}%")
-
-                # Cost efficiency
-                if metrics['total_cost_eur'] > 0 and valid_rows > 0:
-                    cost_per_row = metrics['total_cost_eur'] / valid_rows
-                    st.caption(f"📊 Keskmine kulu rea kohta: €{cost_per_row:.6f}")
-        else:
-            st.info("AI teenusepakkuja ei ole valitud või kasutuses.")
+                            # Download per-file XLSX
+                            xlsx_bytes = create_per_file_xlsx(
+                                result['data'],
+                                result['filename'],
+                                result.get('columns'),
+                                result.get('formatting')
+                            )
+                            st.download_button(
+                                label="⬇️ Laadi alla XLSX",
+                                data=xlsx_bytes,
+                                file_name=f"{result['filename']}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                    else:
+                        st.error(f"❌ {result.get('error', 'Tundmatu viga')}")
 
 
 if __name__ == "__main__":

@@ -1,26 +1,22 @@
-# PDF OCR - Töötundide töötlemine
+# PDF Table Extractor
 
-Streamlit-based prototype for extracting work-hour data from PDF files with OCR support.
+Universal PDF to XLSX converter using AI Vision APIs. Extract tables from any PDF document and export to Excel with formatting preservation.
 
 ## Features
 
 - ✅ **Multi-file PDF processing** (up to 10 pages per file)
-- 🔍 **Intelligent table extraction** (pdfplumber → camelot → OCR fallback)
-- 🌍 **OCR support** for scanned documents (Estonian + English)
-- 📊 **Quarterly aggregation** with pivot summaries
-- 🤖 **AI provider benchmarking** (ChatGPT, Grok, Kimi, Gemini)
-- 📈 **XLSX export** (per-file and aggregated reports)
-- 🇪🇪 **Estonian language UI**
+- 🤖 **AI Vision API extraction** (Gemini, OpenAI GPT-4o, Grok, Kimi)
+- 🎨 **Visual structure preservation** (borders, merged cells, bold text)
+- 📊 **XLSX export with formatting**
+- 💰 **Cost tracking** (token usage and EUR cost per file)
+- 🌍 **No validation** - exports exactly what Vision API returns
 
-## Schema
+## How It Works
 
-The application extracts and normalizes data to the following schema:
-
-- **Kuupäev** - Date in dd.mm.yyyy format (2000-2035)
-- **Töötaja** - Employee name (text)
-- **Projekt** - Project name (text)
-- **Tunnid** - Hours worked (numeric, ≥ 0, rounded to 2 decimals)
-- **Allikas** - Source filename (auto-added)
+1. **Upload PDFs** - Select one or more PDF files (max 10 pages each)
+2. **AI Extraction** - Vision API analyzes each page and extracts table data
+3. **Formatting Detection** - Preserves visual structure (merged cells, borders, bold)
+4. **XLSX Export** - Download Excel files with original formatting
 
 ## Installation
 
@@ -37,25 +33,9 @@ cd PDF-OCR-testing
 pip install -r requirements.txt
 ```
 
-3. Install Tesseract OCR:
-
-**Ubuntu/Debian:**
+3. Run the application:
 ```bash
-sudo apt-get update
-sudo apt-get install tesseract-ocr tesseract-ocr-est tesseract-ocr-eng
-```
-
-**macOS:**
-```bash
-brew install tesseract tesseract-lang
-```
-
-**Windows:**
-Download installer from: https://github.com/UB-Mannheim/tesseract/wiki
-
-4. Run the application:
-```bash
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
 ### Streamlit Cloud Deployment
@@ -66,174 +46,112 @@ streamlit run app.py
 
 3. Create new app and select your repository
 
-4. Add the following to your `packages.txt` file (create in root):
-```
-tesseract-ocr
-tesseract-ocr-est
-tesseract-ocr-eng
-libgl1
-```
-
-5. Configure secrets (Settings → Secrets):
+4. Configure secrets (Settings → Secrets):
 ```toml
-# Optional: Add API keys for AI providers
+# Add API keys for AI providers
 OPENAI_API_KEY = "sk-..."
 GROK_API_KEY = "xai-..."
 KIMI_API_KEY = "..."
 GEMINI_API_KEY = "..."
 ```
 
-6. Deploy!
+5. Deploy!
 
 ## Usage
 
-### 1. Upload PDFs
-
-- Upload one or more PDF files (max 10 pages each)
-- Files with >10 pages will be rejected with a polite error message
-
-### 2. Select AI Provider (Optional)
+### 1. Select AI Provider
 
 Choose from:
-- **Pole (ainult reeglid)** - Rule-based only, no AI
-- **ChatGPT** - OpenAI GPT-4
-- **Grok** - xAI Grok
-- **Kimi** - Moonshot AI
-- **Gemini** - Google Gemini
+- **Gemini** - Google Gemini 1.5 Pro (best for vision)
+- **ChatGPT** - OpenAI GPT-4o
+- **Grok** - xAI Grok (OpenAI-compatible)
+- **Kimi** - Moonshot AI (OpenAI-compatible)
 
 Enter API key or configure in `st.secrets`
+
+### 2. Upload PDFs
+
+- Upload one or more PDF files (max 10 pages each)
+- Files with >10 pages will be rejected (cost protection)
 
 ### 3. Process Files
 
 - Click "Töötle failid" to start processing
 - View per-file results with:
+  - Page count
+  - Rows extracted
+  - Tables found
+  - AI cost (tokens + EUR)
   - Data preview
-  - Validation warnings
   - Download individual XLSX reports
-
-### 4. Generate Quarterly Report
-
-- Switch to "Kvartaliaruanne" tab
-- View pivot summary (Töötaja × Projekt × Month)
-- Download aggregated XLSX with two sheets:
-  - **Koond** - Pivot summary
-  - **Toorandmed** - All raw data
-
-### 5. Benchmark AI Providers
-
-- Switch to "Võrdlus" tab
-- Compare:
-  - API call count
-  - Total & average latency
-  - Accuracy percentage
 
 ## Architecture
 
 ```
-pdf-ocr-testing/
-├── app.py                 # Main Streamlit application
+t88lehed-tabelina/
+├── streamlit_app.py           # Main Streamlit application
 ├── core/
-│   ├── ingest.py         # Page validation & classification
-│   ├── ocr.py            # Pytesseract OCR (et+en)
-│   ├── tables.py         # Table extraction (multi-method)
-│   ├── normalize.py      # Schema mapping & normalization
-│   ├── validate.py       # Rule-based validation
-│   ├── aggregate.py      # Quarterly aggregation & pivot
+│   ├── ingest.py              # Page validation & limit checks
+│   ├── ocr.py                 # PDF to image conversion
 │   └── providers/
-│       ├── base.py       # AI provider interface
-│       ├── openai_provider.py
-│       ├── grok_provider.py
-│       ├── kimi_provider.py
-│       └── gemini_provider.py
+│       ├── base.py            # AI provider interface
+│       ├── gemini_provider.py # Google Gemini
+│       ├── openai_provider.py # OpenAI GPT-4o
+│       ├── grok_provider.py   # xAI Grok
+│       └── kimi_provider.py   # Moonshot AI Kimi
 ├── utils/
-│   ├── dates.py          # Date parsing & quarter logic
-│   ├── io.py             # XLSX export
-│   └── parallel.py       # Concurrent processing
+│   └── io.py                  # XLSX export with formatting
 └── requirements.txt
 ```
 
 ## Data Processing Pipeline
 
-1. **Ingest**: Validate page count (≤10), classify pages as text/OCR
-2. **Extract**: Try pdfplumber → camelot (lattice) → camelot (stream) → OCR fallback
-3. **Normalize**: Map headers to schema, normalize date/number formats
-4. **Validate**: Check date format, numeric ranges, required fields
-5. **Aggregate**: Derive quarters, create pivot summaries
-6. **Export**: Generate XLSX with proper formatting
+1. **Ingest**: Validate page count (≤10)
+2. **Convert**: PDF pages to images
+3. **Extract**: Vision API analyzes images and returns:
+   - Column names
+   - Row data (as dictionaries)
+   - Table metadata (count, confidence)
+   - Formatting (merged cells, borders, bold)
+4. **Export**: Generate XLSX with visual formatting preserved
 
-## Validation Rules
+## AI Provider Pricing
 
-- **Kuupäev**: Must match dd.mm.yyyy and be within 2000-2035
-- **Tunnid**: Must be numeric, ≥ 0, rounded to 2 decimals (half-up)
-- **Töötaja & Projekt**: Cannot be empty
-- **Total consistency**: If document contains "Kokku/Total", verify sum matches (tolerance: 0.01)
+All costs shown in EUR:
 
-## AI Provider Configuration
+| Provider | Input (1M tokens) | Output (1M tokens) |
+|----------|-------------------|-------------------|
+| Gemini 1.5 Pro | €1.21 | €4.40 |
+| GPT-4o | €4.40 | €13.20 |
+| Grok | €4.40 | €13.20 |
+| Kimi | €1.56 | €1.56 |
 
-### OpenAI (ChatGPT)
-```python
-# In secrets.toml
-OPENAI_API_KEY = "sk-..."
-```
+## Formatting Preservation
 
-### Grok (xAI)
-```python
-# In secrets.toml
-GROK_API_KEY = "xai-..."
-```
+The Vision API detects and exports:
 
-### Kimi (Moonshot)
-```python
-# In secrets.toml
-KIMI_API_KEY = "..."
-```
+- **Merged cells** - Cells spanning multiple columns/rows
+- **Cell borders** - Individual border visibility (top, bottom, left, right)
+- **Header rows** - Rows containing table headers
+- **Total rows** - Rows containing sums/totals
+- **Bold cells** - Emphasized text cells
 
-### Gemini (Google)
-```python
-# In secrets.toml
-GEMINI_API_KEY = "..."
-```
-
-## Testing
-
-To test the application, use sample PDF files containing work-hour tables with:
-- Various header formats (Estonian/English)
-- Mixed text and scanned pages
-- Different table layouts
-- Total rows for consistency checking
-
-Minimum 10 sample PDFs recommended for MVP validation.
-
-## Troubleshooting
-
-### Tesseract not found
-```bash
-# Check installation
-tesseract --version
-
-# Check language data
-tesseract --list-langs
-```
-
-### Camelot errors
-Camelot requires Ghostscript and OpenCV:
-```bash
-# Ubuntu
-sudo apt-get install ghostscript
-
-# macOS
-brew install ghostscript
-```
-
-### API rate limits
-Switch to "Pole (ainult reeglid)" mode to process without AI enhancement.
+All formatting is preserved in the exported XLSX file.
 
 ## Performance
 
-- **Local**: Fast for text-based PDFs, slower for OCR
-- **Streamlit Cloud**: Limited by free tier resources
-- **Parallel processing**: Enabled for multi-file batches
-- **AI calls**: Can be disabled for rule-based only processing
+- **Page limit**: 10 pages per PDF (cost protection)
+- **Batch processing**: Processes multiple files sequentially
+- **Cost tracking**: Real-time token usage and EUR cost per file
+- **No validation**: Exports exactly what Vision API returns (no data modification)
+
+## Version History
+
+- **v3.0.0** - Universal PDF table extractor (removed validation, quarterly reports)
+- **v2.1.2** - Bug fix: Show warnings even when processing fails
+- **v2.1.0** - Added Vision API formatting preservation
+- **v2.0.0** - Added AI Vision API support
+- **v1.0.0** - Initial release with rule-based extraction
 
 ## License
 

@@ -1,11 +1,9 @@
 """
-Base AI provider interface for table normalization and header stabilization.
+Base AI provider interface for PDF table extraction using Vision APIs.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
-import time
-import pandas as pd
+from typing import Dict, Any, Optional
 
 
 class AIProvider(ABC):
@@ -29,83 +27,32 @@ class AIProvider(ABC):
         self.pricing = self._get_pricing()
 
     @abstractmethod
-    def normalize_table(
-        self,
-        raw_table: pd.DataFrame,
-        context: Optional[str] = None
-    ) -> pd.DataFrame:
-        """
-        Normalize a table using AI to improve header mapping and data cleanup.
-
-        Args:
-            raw_table: Raw extracted DataFrame
-            context: Optional context about the document
-
-        Returns:
-            Normalized DataFrame with standardized columns
-        """
-        pass
-
-    @abstractmethod
-    def enhance_ocr_text(
-        self,
-        ocr_text: str,
-        context: Optional[str] = None
-    ) -> str:
-        """
-        Clean up and enhance OCR text using AI.
-
-        Args:
-            ocr_text: Raw OCR output
-            context: Optional context
-
-        Returns:
-            Enhanced text
-        """
-        pass
-
-    @abstractmethod
     def extract_table_from_image(
         self,
         image_bytes: bytes,
         context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Extract structured work hours table directly from image using Vision API.
-
-        This is the PREMIUM method - uses vision models to see the actual document.
+        Extract tables from PDF page image using Vision API.
 
         Args:
             image_bytes: Image bytes (PDF page as PNG/JPEG)
-            context: Optional context (filename, etc.)
+            context: Optional context (filename, page number, etc.)
 
         Returns:
             Dictionary with:
-            - rows: List of dicts with keys: Kuupäev, Töötaja, Projekt, Tunnid
+            - rows: List of dicts with extracted data
             - columns: List of column names
-            - metadata: Dict with warnings, calculated_fields, unreadable_fields, etc.
-            - formatting: Dict with visual structure information (optional)
+            - metadata: Dict with tables_found, total_rows, etc.
+            - formatting: Dict with visual structure (borders, merged cells, bold)
             - success: Boolean
 
         Formatting Dictionary (optional):
             - merged_cells: List of merged cell ranges
-              [{"start_row": 0, "start_col": 0, "end_row": 0, "end_col": 2, "value": "Header"}]
             - cell_borders: Dict mapping "row,col" to border info
-              {"0,0": {"top": True, "bottom": True, "left": True, "right": True}}
-            - header_rows: List of row indices that are headers [0, 1]
-            - total_rows: List of row indices that contain totals [10]
-            - bold_cells: List of [row, col] coordinates for bold cells [[0, 0], [0, 1]]
-
-        AI Instructions:
-        - Extract exact data from the image
-        - If a value is UNREADABLE: mark as "UNREADABLE"
-        - If a value can be CALCULATED (e.g. sum from other rows):
-          * Calculate it
-          * Mark in metadata: {"calculated_fields": ["row_3_Tunnid"]}
-        - NEVER invent data that isn't visible or calculable
-        - Date format: dd.mm.yyyy
-        - Hours: numeric, rounded to 2 decimals
-        - FORMATTING: Detect table structure (borders, merged cells) if requested
+            - header_rows: List of row indices that are headers
+            - total_rows: List of row indices that contain totals
+            - bold_cells: List of [row, col] coordinates for bold cells
         """
         pass
 
@@ -120,7 +67,7 @@ class AIProvider(ABC):
 
     def _track_call(self, latency: float, input_tokens: int = 0, output_tokens: int = 0):
         """
-        Track API call for benchmarking.
+        Track API call for cost and performance monitoring.
 
         Args:
             latency: Time taken for the call in seconds
@@ -148,7 +95,7 @@ class AIProvider(ABC):
             - total_latency: Total latency in seconds
             - avg_latency: Average latency per call
             - total_tokens: Total tokens used
-            - total_cost: Total cost in EUR
+            - total_cost_eur: Total cost in EUR
         """
         avg_latency = self.total_latency / self.call_count if self.call_count > 0 else 0.0
 
@@ -171,40 +118,23 @@ class AIProvider(ABC):
 
 class NoOpProvider(AIProvider):
     """
-    No-operation provider for rule-based only processing.
-    Does not make any AI calls.
+    Placeholder provider - Vision API is required.
     """
 
     def __init__(self):
         super().__init__(api_key=None)
-        self.name = "Pole (ainult reeglid)"
-
-    def normalize_table(
-        self,
-        raw_table: pd.DataFrame,
-        context: Optional[str] = None
-    ) -> pd.DataFrame:
-        """Pass-through without AI enhancement."""
-        return raw_table
-
-    def enhance_ocr_text(
-        self,
-        ocr_text: str,
-        context: Optional[str] = None
-    ) -> str:
-        """Pass-through without AI enhancement."""
-        return ocr_text
+        self.name = "No AI Provider"
 
     def extract_table_from_image(
         self,
         image_bytes: bytes,
         context: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Not available without AI."""
+        """Not available without AI provider."""
         return {
             'rows': [],
             'columns': [],
-            'metadata': {'warning': 'Vision API not available without AI provider'},
+            'metadata': {'warning': 'Vision API required - no AI provider configured'},
             'formatting': {},
             'success': False
         }
@@ -215,7 +145,7 @@ def create_provider(provider_name: str, api_key: Optional[str] = None) -> AIProv
     Factory function to create AI provider instances.
 
     Args:
-        provider_name: Name of the provider ("openai", "grok", "kimi", "gemini", "none")
+        provider_name: Name of the provider ("openai", "grok", "kimi", "gemini")
         api_key: API key for the provider
 
     Returns:
@@ -224,10 +154,7 @@ def create_provider(provider_name: str, api_key: Optional[str] = None) -> AIProv
     Raises:
         ValueError: If provider name is not recognized
     """
-    if provider_name.lower() == "none" or provider_name.lower() == "pole":
-        return NoOpProvider()
-
-    elif provider_name.lower() == "openai" or provider_name.lower() == "chatgpt":
+    if provider_name.lower() == "openai" or provider_name.lower() == "chatgpt":
         from core.providers.openai_provider import OpenAIProvider
         return OpenAIProvider(api_key)
 
