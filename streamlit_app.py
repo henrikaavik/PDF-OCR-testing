@@ -136,7 +136,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
 
             # Add table structure info
             table_columns = all_columns
-            table_data = all_vision_data
+            table_data = validation_result['valid_data']  # Use validated data
 
         else:
             # Traditional pipeline: merge tables → normalize
