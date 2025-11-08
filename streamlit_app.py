@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.4.0"  # Multi-table extraction from single page
+__version__ = "1.5.0"  # Improved multi-table detection and validation
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -63,6 +63,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         all_vision_data = []
         all_columns = []
         vision_warnings = []
+        vision_tables_count = 0
         used_vision_api = False
 
         # Step 3: If no tables found, use VISION API (PREMIUM METHOD)
@@ -92,6 +93,14 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
 
                     # Collect metadata warnings
                     metadata = vision_result.get('metadata', {})
+
+                    # Track number of tables found
+                    if metadata.get('tables_found'):
+                        vision_tables_count += metadata['tables_found']
+                        vision_warnings.append(
+                            f"Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit"
+                        )
+
                     if metadata.get('calculated_fields'):
                         vision_warnings.append(
                             f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
@@ -124,6 +133,20 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                 validation_result = validate_file_data(all_vision_data, None)
                 if vision_warnings:
                     validation_result['warnings'].extend(vision_warnings)
+
+                # If validation rejected all rows, show everything anyway (Vision API mode)
+                if not validation_result['valid_data'] and all_vision_data:
+                    validation_result['warnings'].append(
+                        f"⚠️ Standardväljad leitud, aga valideerimise käigus kõik read tagasi lükatud. "
+                        f"Näitan kõiki andmeid ilma valideerimiseta."
+                    )
+                    validation_result = {
+                        'valid_data': all_vision_data,
+                        'warnings': validation_result['warnings'],
+                        'total_hours': 0.0,
+                        'valid_row_count': len(all_vision_data),
+                        'invalid_row_count': 0
+                    }
             else:
                 # No standard fields, skip validation
                 validation_result = {
@@ -170,7 +193,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'filename': filename,
             'success': True,
             'page_count': ingest_result['page_count'],
-            'tables_found': len(all_tables) if not used_vision_api else 0,
+            'tables_found': vision_tables_count if used_vision_api else len(all_tables),
             'used_vision_api': used_vision_api,
             'columns': table_columns,
             'data': table_data,
