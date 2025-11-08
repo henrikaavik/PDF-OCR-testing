@@ -168,35 +168,39 @@ Return the cleaned text without explanations."""
         # Encode image to base64
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
-        prompt = """Analyze this work hours timesheet image and extract ALL data into a structured JSON format.
+        prompt = """Analyze this table/timesheet image and extract the COMPLETE table structure with ALL columns and rows.
 
 CRITICAL RULES:
-1. Extract ONLY data that is CLEARLY VISIBLE in the image
-2. If a cell is UNREADABLE or BLANK, use "UNREADABLE" as the value
-3. If you can CALCULATE a missing value from other visible data (e.g., sum total from individual rows), you MAY calculate it
-4. NEVER invent or guess data that isn't visible or calculable
-5. Date format: dd.mm.yyyy (if visible in other format, convert it)
-6. Hours: numeric values only, rounded to 2 decimals
+1. First identify ALL column headers in the table
+2. Extract EVERY cell value that is CLEARLY VISIBLE
+3. If a cell is UNREADABLE or BLANK, use "UNREADABLE" as the value
+4. If you can CALCULATE a missing value from other visible data (e.g., sum total), you MAY calculate it
+5. NEVER invent or guess data that isn't visible or calculable
+6. Preserve the exact table structure (all columns, all rows)
+7. For dates: use format dd.mm.yyyy (convert if needed)
+8. For numbers: use numeric values, rounded to 2 decimals
 
 Return ONLY this JSON structure (no explanations):
 {
+  "columns": ["Column1", "Column2", "Column3", ...],
   "rows": [
-    {
-      "Kuupäev": "01.01.2025",
-      "Töötaja": "Jaan Tamm",
-      "Projekt": "Project X",
-      "Tunnid": 8.00
-    }
+    {"Column1": "value1", "Column2": "value2", "Column3": "value3", ...},
+    {"Column1": "value1", "Column2": "value2", "Column3": "value3", ...}
   ],
   "metadata": {
     "calculated_fields": [],
     "unreadable_fields": [],
-    "warnings": []
+    "warnings": [],
+    "total_columns": 0,
+    "total_rows": 0
   }
 }
 
-If you calculated a field, add it to calculated_fields as "row_X_fieldname".
-If a field was unreadable, add it to unreadable_fields as "row_X_fieldname".
+IMPORTANT:
+- Extract ALL columns you see, not just specific fields
+- Each row must have values for ALL columns (use "UNREADABLE" for empty/unclear cells)
+- If you calculated a field, add "row_X_column_name" to calculated_fields
+- If a field was unreadable, add "row_X_column_name" to unreadable_fields
 """
 
         start_time = time.time()
@@ -242,9 +246,20 @@ If a field was unreadable, add it to unreadable_fields as "row_X_fieldname".
 
             result = json.loads(content)
 
+            # Update metadata with total counts
+            metadata = result.get('metadata', {})
+            columns = result.get('columns', [])
+            rows = result.get('rows', [])
+
+            if 'total_columns' not in metadata:
+                metadata['total_columns'] = len(columns)
+            if 'total_rows' not in metadata:
+                metadata['total_rows'] = len(rows)
+
             return {
-                'rows': result.get('rows', []),
-                'metadata': result.get('metadata', {}),
+                'columns': columns,
+                'rows': rows,
+                'metadata': metadata,
                 'success': True
             }
 
@@ -252,6 +267,7 @@ If a field was unreadable, add it to unreadable_fields as "row_X_fieldname".
             latency = time.time() - start_time
             self._track_call(latency)
             return {
+                'columns': [],
                 'rows': [],
                 'metadata': {'error': str(e)},
                 'success': False

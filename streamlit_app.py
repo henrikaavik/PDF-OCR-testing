@@ -61,7 +61,9 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         all_tables = extract_all_tables(pdf_bytes, ingest_result['pages'])
 
         all_vision_data = []
+        all_columns = []
         vision_warnings = []
+        used_vision_api = False
 
         # Step 3: If no tables found, use VISION API (PREMIUM METHOD)
         if not all_tables and provider and provider.name != "Pole (ainult reeglid)":
@@ -81,7 +83,12 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                 )
 
                 if vision_result['success'] and vision_result['rows']:
+                    used_vision_api = True
                     all_vision_data.extend(vision_result['rows'])
+
+                    # Collect columns (from first successful extraction)
+                    if not all_columns and vision_result.get('columns'):
+                        all_columns = vision_result['columns']
 
                     # Collect metadata warnings
                     metadata = vision_result.get('metadata', {})
@@ -106,10 +113,31 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
 
         # Step 5: Merge tables or use vision data
         if all_vision_data:
-            # Vision API gave us structured data directly
-            normalized_data = all_vision_data
-            merged_table = pd.DataFrame()  # Empty for vision path
-            expected_total = None  # Vision API doesn't extract totals separately
+            # Vision API gave us complete table structure
+            # Check if standard fields exist for validation
+            has_standard_fields = all_columns and all(
+                field in all_columns for field in ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
+            )
+
+            if has_standard_fields:
+                # We have standard fields, can validate
+                validation_result = validate_file_data(all_vision_data, None)
+                if vision_warnings:
+                    validation_result['warnings'].extend(vision_warnings)
+            else:
+                # No standard fields, skip validation
+                validation_result = {
+                    'valid_data': all_vision_data,
+                    'warnings': vision_warnings.copy() if vision_warnings else [],
+                    'total_hours': 0.0,
+                    'valid_row_count': len(all_vision_data),
+                    'invalid_row_count': 0
+                }
+
+            # Add table structure info
+            table_columns = all_columns
+            table_data = all_vision_data
+
         else:
             # Traditional pipeline: merge tables → normalize
             merged_table = merge_tables(all_tables) if all_tables else pd.DataFrame()
@@ -123,12 +151,12 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             # Find expected total (if present)
             expected_total = find_total_row(merged_table) if not merged_table.empty else None
 
-        # Step 6: Validate
-        validation_result = validate_file_data(normalized_data, expected_total)
+            # Validate
+            validation_result = validate_file_data(normalized_data, expected_total)
 
-        # Merge vision warnings into validation warnings
-        if vision_warnings:
-            validation_result['warnings'].extend(vision_warnings)
+            # For traditional path, columns are standard fields
+            table_columns = ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
+            table_data = validation_result['valid_data']
 
         # Calculate cost for this file
         file_cost = 0.0
@@ -142,8 +170,10 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'filename': filename,
             'success': True,
             'page_count': ingest_result['page_count'],
-            'tables_found': len(all_tables),
-            'data': validation_result['valid_data'],
+            'tables_found': len(all_tables) if not used_vision_api else 0,
+            'used_vision_api': used_vision_api,
+            'columns': table_columns,
+            'data': table_data,
             'warnings': validation_result['warnings'],
             'total_hours': validation_result['total_hours'],
             'valid_row_count': validation_result['valid_row_count'],
@@ -158,6 +188,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'success': False,
             'error': str(e),
             'data': [],
+            'columns': [],
             'warnings': [str(e)]
         }
 
@@ -167,6 +198,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             'success': False,
             'error': str(e),
             'data': [],
+            'columns': [],
             'warnings': [f"Viga faili töötlemisel: {str(e)}"]
         }
 
@@ -325,7 +357,8 @@ def main():
                                 # Download per-file XLSX
                                 xlsx_bytes = create_per_file_xlsx(
                                     result['data'],
-                                    result['filename']
+                                    result['filename'],
+                                    result.get('columns')  # Pass columns if available
                                 )
                                 st.download_button(
                                     label="⬇️ Laadi alla XLSX",

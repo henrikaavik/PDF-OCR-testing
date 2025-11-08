@@ -13,20 +13,29 @@ from utils.dates import get_month_name_estonian
 COLUMN_ORDER = ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid', 'Allikas']
 
 
-def create_per_file_xlsx(data: List[Dict[str, Any]], filename: str) -> bytes:
+def create_per_file_xlsx(data: List[Dict[str, Any]], filename: str, columns: List[str] = None) -> bytes:
     """
     Create XLSX file for a single PDF's extracted data.
 
     Args:
         data: List of row dictionaries with schema fields + Allikas
         filename: Original PDF filename (used for Allikas column)
+        columns: Optional list of column names. If None, uses standard COLUMN_ORDER
 
     Returns:
         XLSX file as bytes
     """
+    # Determine column order
+    if columns:
+        # Use provided columns (from Vision API or custom extraction)
+        column_order = columns + ['Allikas']
+    else:
+        # Use standard columns
+        column_order = COLUMN_ORDER
+
     if not data:
         # Create empty DataFrame with correct columns
-        df = pd.DataFrame(columns=COLUMN_ORDER)
+        df = pd.DataFrame(columns=column_order)
     else:
         # Add filename to each row
         for row in data:
@@ -35,12 +44,12 @@ def create_per_file_xlsx(data: List[Dict[str, Any]], filename: str) -> bytes:
         df = pd.DataFrame(data)
 
         # Ensure all required columns exist
-        for col in COLUMN_ORDER:
+        for col in column_order:
             if col not in df.columns:
                 df[col] = ''
 
         # Reorder columns
-        df = df[COLUMN_ORDER]
+        df = df[[col for col in column_order if col in df.columns]]
 
     # Export to bytes
     output = io.BytesIO()
