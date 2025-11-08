@@ -64,6 +64,39 @@ class AIProvider(ABC):
         """
         pass
 
+    @abstractmethod
+    def extract_table_from_image(
+        self,
+        image_bytes: bytes,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Extract structured work hours table directly from image using Vision API.
+
+        This is the PREMIUM method - uses vision models to see the actual document.
+
+        Args:
+            image_bytes: Image bytes (PDF page as PNG/JPEG)
+            context: Optional context (filename, etc.)
+
+        Returns:
+            Dictionary with:
+            - rows: List of dicts with keys: Kuupäev, Töötaja, Projekt, Tunnid
+            - metadata: Dict with warnings, calculated_fields, unreadable_fields
+            - success: Boolean
+
+        AI Instructions:
+        - Extract exact data from the image
+        - If a value is UNREADABLE: mark as "UNREADABLE"
+        - If a value can be CALCULATED (e.g. sum from other rows):
+          * Calculate it
+          * Mark in metadata: {"calculated_fields": ["row_3_Tunnid"]}
+        - NEVER invent data that isn't visible or calculable
+        - Date format: dd.mm.yyyy
+        - Hours: numeric, rounded to 2 decimals
+        """
+        pass
+
     def _get_pricing(self) -> Dict[str, float]:
         """
         Get pricing information for the provider.
@@ -149,6 +182,18 @@ class NoOpProvider(AIProvider):
     ) -> str:
         """Pass-through without AI enhancement."""
         return ocr_text
+
+    def extract_table_from_image(
+        self,
+        image_bytes: bytes,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Not available without AI."""
+        return {
+            'rows': [],
+            'metadata': {'warning': 'Vision API not available without AI provider'},
+            'success': False
+        }
 
 
 def create_provider(provider_name: str, api_key: Optional[str] = None) -> AIProvider:

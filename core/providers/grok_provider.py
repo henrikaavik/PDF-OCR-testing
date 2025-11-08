@@ -150,3 +150,15 @@ Return the cleaned text without explanations."""
             latency = time.time() - start_time
             self._track_call(latency)
             return ocr_text
+
+    def extract_table_from_image(
+        self,
+        image_bytes: bytes,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Grok vision support - placeholder."""
+        return {
+            'rows': [],
+            'metadata': {'warning': 'Grok vision API not yet implemented'},
+            'success': False
+        }

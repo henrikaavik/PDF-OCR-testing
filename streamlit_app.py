@@ -9,12 +9,12 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.1.0"
+__version__ = "1.2.0"  # Vision API added!
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
-from core.ocr import ocr_pdf_page, ocr_pdf_all_pages
-from core.tables import extract_all_tables, merge_tables
+from core.ocr import ocr_pdf_page, ocr_pdf_all_pages, pdf_to_images
+from core.tables import extract_all_tables, merge_tables, parse_table_from_text
 from core.normalize import normalize_dataframe, find_total_row
 from core.validate import validate_file_data
 from core.aggregate import aggregate_multiple_files, get_quarter_summary_text
@@ -57,34 +57,78 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         # Step 1: Ingest and validate page count
         ingest_result = ingest_pdf(pdf_bytes, filename)
 
-        # Step 2: Extract tables from all pages
+        # Step 2: Extract tables from all pages (rule-based)
         all_tables = extract_all_tables(pdf_bytes, ingest_result['pages'])
 
-        # If no tables found, try OCR on all pages
-        if not all_tables:
+        all_vision_data = []
+        vision_warnings = []
+
+        # Step 3: If no tables found, use VISION API (PREMIUM METHOD)
+        if not all_tables and provider and provider.name != "Pole (ainult reeglid)":
+            # Convert PDF pages to images
+            images = pdf_to_images(pdf_bytes)
+
+            for page_num, image in enumerate(images):
+                # Convert PIL Image to bytes
+                img_byte_arr = io.BytesIO()
+                image.save(img_byte_arr, format='PNG')
+                image_bytes = img_byte_arr.getvalue()
+
+                # Extract from image using Vision API
+                vision_result = provider.extract_table_from_image(
+                    image_bytes,
+                    context=f"{filename} page {page_num+1}"
+                )
+
+                if vision_result['success'] and vision_result['rows']:
+                    all_vision_data.extend(vision_result['rows'])
+
+                    # Collect metadata warnings
+                    metadata = vision_result.get('metadata', {})
+                    if metadata.get('calculated_fields'):
+                        vision_warnings.append(
+                            f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
+                        )
+                    if metadata.get('unreadable_fields'):
+                        vision_warnings.append(
+                            f"Lehekülg {page_num+1}: Loetamatud väljad: {', '.join(metadata['unreadable_fields'])}"
+                        )
+
+        # Step 4: Fallback to OCR + text parsing if vision failed
+        if not all_tables and not all_vision_data:
             ocr_results = ocr_pdf_all_pages(pdf_bytes)
 
-            # AI enhancement of OCR text if provider is available
-            if provider and provider.name != "Pole (ainult reeglid)":
-                for page_num, ocr_text in ocr_results:
-                    enhanced_text = provider.enhance_ocr_text(ocr_text)
-                    # Note: enhanced text could be reparsed for tables here
+            for page_num, ocr_text in ocr_results:
+                # Try rule-based text parsing
+                parsed_table = parse_table_from_text(ocr_text)
+                if parsed_table is not None:
+                    all_tables.append(parsed_table)
 
-        # Step 3: Merge tables
-        merged_table = merge_tables(all_tables) if all_tables else pd.DataFrame()
+        # Step 5: Merge tables or use vision data
+        if all_vision_data:
+            # Vision API gave us structured data directly
+            normalized_data = all_vision_data
+            merged_table = pd.DataFrame()  # Empty for vision path
+            expected_total = None  # Vision API doesn't extract totals separately
+        else:
+            # Traditional pipeline: merge tables → normalize
+            merged_table = merge_tables(all_tables) if all_tables else pd.DataFrame()
 
-        # Step 4: Normalize data with AI if available
-        if provider and provider.name != "Pole (ainult reeglid)" and not merged_table.empty:
-            # AI-enhanced normalization
-            merged_table = provider.normalize_table(merged_table, context=f"Work hours from {filename}")
+            # AI-enhanced normalization if available
+            if provider and provider.name != "Pole (ainult reeglid)" and not merged_table.empty:
+                merged_table = provider.normalize_table(merged_table, context=f"Work hours from {filename}")
 
-        normalized_data = normalize_dataframe(merged_table)
+            normalized_data = normalize_dataframe(merged_table)
 
-        # Step 5: Find expected total (if present)
-        expected_total = find_total_row(merged_table) if not merged_table.empty else None
+            # Find expected total (if present)
+            expected_total = find_total_row(merged_table) if not merged_table.empty else None
 
         # Step 6: Validate
         validation_result = validate_file_data(normalized_data, expected_total)
+
+        # Merge vision warnings into validation warnings
+        if vision_warnings:
+            validation_result['warnings'].extend(vision_warnings)
 
         # Calculate cost for this file
         file_cost = 0.0
