@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "2.1.0"  # Visual table structure extraction (borders, merged cells, bold text)
+__version__ = "2.1.1"  # Bug fix: Added JSON parsing error handling for Vision API responses
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
