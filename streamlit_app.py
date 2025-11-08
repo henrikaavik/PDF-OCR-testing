@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.7.0"  # Debug info + vision warnings always shown
+__version__ = "1.8.0"  # Enhanced DEBUG - full JSON structure of Vision API response
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
