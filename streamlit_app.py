@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.8.0"  # Enhanced DEBUG - full JSON structure of Vision API response
+__version__ = "1.9.0"  # DEBUG for both Vision API and rule-based pipeline
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -65,6 +65,13 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
         vision_warnings = []
         vision_tables_count = 0
         used_vision_api = False
+
+        # DEBUG: Log rule-based extraction results
+        import json as debug_json
+        if all_tables:
+            vision_warnings.append(
+                f"DEBUG - Rule-based ekstraheerimine: Leitud {len(all_tables)} tabelit PDF-ist"
+            )
 
         # Step 3: If no tables found, use VISION API (PREMIUM METHOD)
         if not all_tables and provider and provider.name != "Pole (ainult reeglid)":
@@ -199,17 +206,46 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
             # Traditional pipeline: merge tables → normalize
             merged_table = merge_tables(all_tables) if all_tables else pd.DataFrame()
 
+            # DEBUG: Log merged table info
+            if not merged_table.empty:
+                vision_warnings.append(
+                    f"DEBUG - Merged table: {len(merged_table)} rida, {len(merged_table.columns)} veergu"
+                )
+                vision_warnings.append(
+                    f"DEBUG - Veergude nimed: {list(merged_table.columns)}"
+                )
+                # Show first few rows
+                sample_data = merged_table.head(3).to_dict('records')
+                vision_warnings.append(
+                    f"DEBUG - Esimesed read:\n```json\n{debug_json.dumps(sample_data, indent=2, ensure_ascii=False)}\n```"
+                )
+
             # AI-enhanced normalization if available
             if provider and provider.name != "Pole (ainult reeglid)" and not merged_table.empty:
                 merged_table = provider.normalize_table(merged_table, context=f"Work hours from {filename}")
 
             normalized_data = normalize_dataframe(merged_table)
 
+            # DEBUG: Log normalization results
+            vision_warnings.append(
+                f"DEBUG - Normaliseerimise tulemus: {len(normalized_data)} rida"
+            )
+            if normalized_data:
+                vision_warnings.append(
+                    f"DEBUG - Normaliseeritud read (näidis):\n```json\n{debug_json.dumps(normalized_data[:3], indent=2, ensure_ascii=False)}\n```"
+                )
+
             # Find expected total (if present)
             expected_total = find_total_row(merged_table) if not merged_table.empty else None
 
             # Validate
             validation_result = validate_file_data(normalized_data, expected_total)
+
+            # DEBUG: Log validation results
+            vision_warnings.append(
+                f"DEBUG - Valideerimise tulemus: {validation_result['valid_row_count']} kehtivat, "
+                f"{validation_result['invalid_row_count']} kehtetut rida"
+            )
 
             # Add vision warnings even in traditional path (if Vision API was tried but failed)
             if vision_warnings:
