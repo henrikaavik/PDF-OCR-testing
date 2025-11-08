@@ -18,6 +18,13 @@ class GeminiProvider(AIProvider):
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         self.name = "Gemini"
 
+    def _get_pricing(self):
+        """Gemini 1.5 Flash pricing in EUR (converted from USD ~1.1)"""
+        return {
+            'input': 0.033,   # ~$0.035 per 1M tokens (up to 128k context)
+            'output': 0.11    # ~$0.12 per 1M tokens
+        }
+
     def normalize_table(
         self,
         raw_table: pd.DataFrame,
@@ -60,7 +67,12 @@ Return ONLY the normalized data as CSV format with headers. Do not include any e
             )
 
             latency = time.time() - start_time
-            self._track_call(latency)
+
+            # Extract token usage
+            input_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+            output_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+
+            self._track_call(latency, input_tokens, output_tokens)
 
             # Parse response
             content = response.text
@@ -113,7 +125,12 @@ Return the cleaned text without explanations."""
             )
 
             latency = time.time() - start_time
-            self._track_call(latency)
+
+            # Extract token usage
+            input_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+            output_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+
+            self._track_call(latency, input_tokens, output_tokens)
 
             enhanced = response.text
             return enhanced

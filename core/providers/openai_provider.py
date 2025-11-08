@@ -18,6 +18,13 @@ class OpenAIProvider(AIProvider):
         self.name = "ChatGPT"
         self.model = "gpt-4o-mini"
 
+    def _get_pricing(self):
+        """GPT-4o-mini pricing in EUR (converted from USD ~1.1)"""
+        return {
+            'input': 0.14,   # ~$0.15 per 1M tokens
+            'output': 0.55   # ~$0.60 per 1M tokens
+        }
+
     def normalize_table(
         self,
         raw_table: pd.DataFrame,
@@ -62,7 +69,13 @@ Return ONLY the normalized data as CSV format with headers. Do not include any e
             )
 
             latency = time.time() - start_time
-            self._track_call(latency)
+
+            # Extract token usage
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+
+            self._track_call(latency, input_tokens, output_tokens)
 
             # Parse response
             content = response.choices[0].message.content
@@ -118,7 +131,13 @@ Return the cleaned text without explanations."""
             )
 
             latency = time.time() - start_time
-            self._track_call(latency)
+
+            # Extract token usage
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+
+            self._track_call(latency, input_tokens, output_tokens)
 
             enhanced = response.choices[0].message.content
             return enhanced

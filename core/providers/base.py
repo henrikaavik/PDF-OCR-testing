@@ -21,7 +21,12 @@ class AIProvider(ABC):
         self.api_key = api_key
         self.call_count = 0
         self.total_latency = 0.0
+        self.total_tokens = 0
+        self.total_cost = 0.0
         self.name = self.__class__.__name__
+
+        # Pricing per 1M tokens (input/output average)
+        self.pricing = self._get_pricing()
 
     @abstractmethod
     def normalize_table(
@@ -59,15 +64,33 @@ class AIProvider(ABC):
         """
         pass
 
-    def _track_call(self, latency: float):
+    def _get_pricing(self) -> Dict[str, float]:
+        """
+        Get pricing information for the provider.
+
+        Returns:
+            Dict with 'input' and 'output' prices per 1M tokens in EUR
+        """
+        return {'input': 0.0, 'output': 0.0}
+
+    def _track_call(self, latency: float, input_tokens: int = 0, output_tokens: int = 0):
         """
         Track API call for benchmarking.
 
         Args:
             latency: Time taken for the call in seconds
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
         """
         self.call_count += 1
         self.total_latency += latency
+        self.total_tokens += input_tokens + output_tokens
+
+        # Calculate cost
+        pricing = self._get_pricing()
+        input_cost = (input_tokens / 1_000_000) * pricing['input']
+        output_cost = (output_tokens / 1_000_000) * pricing['output']
+        self.total_cost += input_cost + output_cost
 
     def get_metrics(self) -> Dict[str, Any]:
         """
@@ -79,6 +102,8 @@ class AIProvider(ABC):
             - calls: Number of API calls
             - total_latency: Total latency in seconds
             - avg_latency: Average latency per call
+            - total_tokens: Total tokens used
+            - total_cost: Total cost in EUR
         """
         avg_latency = self.total_latency / self.call_count if self.call_count > 0 else 0.0
 
@@ -86,13 +111,17 @@ class AIProvider(ABC):
             'name': self.name,
             'calls': self.call_count,
             'total_latency': round(self.total_latency, 3),
-            'avg_latency': round(avg_latency, 3)
+            'avg_latency': round(avg_latency, 3),
+            'total_tokens': self.total_tokens,
+            'total_cost_eur': round(self.total_cost, 4)
         }
 
     def reset_metrics(self):
         """Reset performance metrics."""
         self.call_count = 0
         self.total_latency = 0.0
+        self.total_tokens = 0
+        self.total_cost = 0.0
 
 
 class NoOpProvider(AIProvider):

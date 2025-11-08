@@ -194,6 +194,13 @@ def main():
                 # Display results
                 st.success(f"✅ Töödeldud {len(results)} faili")
 
+                # Show AI cost summary if provider was used
+                if provider and provider.name != "Pole (ainult reeglid)":
+                    metrics = provider.get_metrics()
+                    if metrics['total_cost_eur'] > 0:
+                        st.info(f"💰 **AI kulu kokku:** €{metrics['total_cost_eur']:.4f} ({metrics['total_tokens']} tokenit)")
+
+
                 # Show per-file results
                 for result in results:
                     with st.expander(f"📄 {result['filename']}", expanded=True):
@@ -202,6 +209,10 @@ def main():
                             col1.metric("Lehekülgi", result.get('page_count', 0))
                             col2.metric("Kehtivaid ridu", result.get('valid_row_count', 0))
                             col3.metric("Tunde kokku", f"{result.get('total_hours', 0):.2f}")
+
+                            # Show AI cost per file if available
+                            if provider and provider.name != "Pole (ainult reeglid)" and result.get('ai_cost'):
+                                st.caption(f"💰 AI kulu: €{result['ai_cost']:.4f}")
 
                             # Warnings
                             if result.get('warnings'):
@@ -281,10 +292,17 @@ def main():
 
             st.subheader(f"Teenusepakkuja: {metrics['name']}")
 
+            # Performance metrics
             col1, col2, col3 = st.columns(3)
             col1.metric("API päringud", metrics['calls'])
             col2.metric("Kogu latentsus (s)", f"{metrics['total_latency']:.3f}")
             col3.metric("Keskmine latentsus (s)", f"{metrics['avg_latency']:.3f}")
+
+            # Cost metrics
+            st.divider()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Tokenit kokku", f"{metrics['total_tokens']:,}")
+            col2.metric("💰 Kulu kokku (EUR)", f"€{metrics['total_cost_eur']:.4f}")
 
             # Calculate accuracy
             if 'results' in st.session_state:
@@ -295,7 +313,12 @@ def main():
 
                 accuracy = (valid_rows / total_rows * 100) if total_rows > 0 else 0
 
-                st.metric("Täpsus", f"{accuracy:.1f}%")
+                col3.metric("Täpsus", f"{accuracy:.1f}%")
+
+                # Cost efficiency
+                if metrics['total_cost_eur'] > 0 and valid_rows > 0:
+                    cost_per_row = metrics['total_cost_eur'] / valid_rows
+                    st.caption(f"📊 Keskmine kulu rea kohta: €{cost_per_row:.6f}")
         else:
             st.info("AI teenusepakkuja ei ole valitud või kasutuses.")
 
