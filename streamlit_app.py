@@ -150,6 +150,20 @@ def main():
             "**Väljund:** XLSX (Excel)"
         )
 
+        st.divider()
+
+        # Reload button
+        st.subheader("🔄 Uuenda")
+        if st.button("🔄 Laadi rakendus uuesti", use_container_width=True):
+            # Clear all caches
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            # Clear session state
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            # Rerun the app
+            st.rerun()
+
     # Main content
     tab1, tab2, tab3 = st.tabs(["📤 Lae üles", "📊 Kvartaliaruanne", "🔍 Võrdlus"])
 
