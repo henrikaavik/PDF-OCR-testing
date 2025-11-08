@@ -1,6 +1,7 @@
 """
 Streamlit PDF OCR Application
 Eesti keeles (Estonian language UI)
+Version 1.0
 """
 
 import streamlit as st
