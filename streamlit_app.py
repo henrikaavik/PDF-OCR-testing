@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "2.1.1"  # Bug fix: Added JSON parsing error handling for Vision API responses
+__version__ = "2.1.2"  # Bug fix: Show warnings even when processing fails
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -450,6 +450,12 @@ def main():
                                 )
                         else:
                             st.error(f"❌ {result.get('error', 'Tundmatu viga')}")
+
+                            # Show warnings even on failure (for debugging)
+                            if result.get('warnings'):
+                                st.warning("⚠️ Hoiatused (debug info):")
+                                for warning in result['warnings']:
+                                    st.write(f"- {warning}")
 
     with tab2:
         st.header("Kvartaliaruanne")
