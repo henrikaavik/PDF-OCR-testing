@@ -74,6 +74,29 @@ STEP 5 - Detect table VISUAL STRUCTURE (borders, merged cells):
 - Total rows: Identify rows containing totals/sums (often labeled "Kokku", "Total", "Summa")
 - Bold cells: Identify cells with bold or emphasized text
 
+STEP 6 - CRITICAL: Small Number Accuracy
+
+PAY EXTRA ATTENTION to small numbers in narrow cells:
+
+1. DISTINGUISH "0" vs "8" carefully:
+   - "8" has TWO loops stacked vertically with a horizontal line in the middle
+   - "0" is ONE oval/circle with NO middle division
+   - If uncertain, look at the MIDDLE of the character - does it have a horizontal stroke?
+
+2. Calendar/Daily columns (numbered 1-31):
+   - These contain hours worked per day - ACCURACY IS CRITICAL
+   - Common values: "0", "8", "OFF", "ON", blank
+   - Empty cells = blank (not "0")
+   - Zoom in mentally before reading small numbers
+
+3. When uncertain between "0" and "8":
+   - Mark as "UNREADABLE" rather than guessing
+   - Better to flag uncertainty than provide wrong data
+
+4. For ALL single-digit numbers in narrow columns:
+   - Double-check your reading
+   - Verify the character shape matches the value
+
 Return ONLY valid JSON (no markdown, no explanations):
 {
   "columns": ["Col1", "Col2", "Col3"],

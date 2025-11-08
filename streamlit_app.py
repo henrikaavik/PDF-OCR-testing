@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "3.0.0"  # Universal PDF table extractor - major refactor
+__version__ = "3.0.1"  # Bug fix: Improved OCR accuracy for small numbers (0 vs 8)
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -52,8 +52,8 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
         # Step 1: Ingest (page count check only)
         ingest_result = ingest_pdf(pdf_bytes, filename)
 
-        # Step 2: Convert to images
-        images = pdf_to_images(pdf_bytes)
+        # Step 2: Convert to images (higher DPI for better small text accuracy)
+        images = pdf_to_images(pdf_bytes, dpi=450)
 
         # Step 3: Extract with Vision API
         all_data = []
