@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.6.0"  # Fixed multi-table extraction with improved prompts
+__version__ = "1.7.0"  # Debug info + vision warnings always shown
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -83,6 +83,13 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                     context=f"{filename} page {page_num+1}"
                 )
 
+                # DEBUG: Always log what Vision API returned
+                vision_warnings.append(
+                    f"DEBUG - Lehekülg {page_num+1}: Vision API success={vision_result.get('success')}, "
+                    f"rows_count={len(vision_result.get('rows', []))}, "
+                    f"columns_count={len(vision_result.get('columns', []))}"
+                )
+
                 if vision_result['success']:
                     # Collect metadata ALWAYS (even if no rows extracted)
                     metadata = vision_result.get('metadata', {})
@@ -123,6 +130,12 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                                 f"⚠️ Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit, "
                                 f"aga ühtegi rida ei ekstraheeritud! AI ei suutnud tabeleid lugeda."
                             )
+                else:
+                    # Vision API failed
+                    error_msg = vision_result.get('metadata', {}).get('error', 'Tundmatu viga')
+                    vision_warnings.append(
+                        f"❌ Lehekülg {page_num+1}: Vision API ebaõnnestus - {error_msg}"
+                    )
 
         # Step 4: Fallback to OCR + text parsing if vision failed
         if not all_tables and not all_vision_data:
@@ -190,6 +203,10 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
 
             # Validate
             validation_result = validate_file_data(normalized_data, expected_total)
+
+            # Add vision warnings even in traditional path (if Vision API was tried but failed)
+            if vision_warnings:
+                validation_result['warnings'].extend(vision_warnings)
 
             # For traditional path, columns are standard fields
             table_columns = ['Kuupäev', 'Töötaja', 'Projekt', 'Tunnid']
