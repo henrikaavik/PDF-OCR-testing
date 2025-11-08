@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.5.0"  # Improved multi-table detection and validation
+__version__ = "1.6.0"  # Fixed multi-table extraction with improved prompts
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -83,15 +83,8 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                     context=f"{filename} page {page_num+1}"
                 )
 
-                if vision_result['success'] and vision_result['rows']:
-                    used_vision_api = True
-                    all_vision_data.extend(vision_result['rows'])
-
-                    # Collect columns (from first successful extraction)
-                    if not all_columns and vision_result.get('columns'):
-                        all_columns = vision_result['columns']
-
-                    # Collect metadata warnings
+                if vision_result['success']:
+                    # Collect metadata ALWAYS (even if no rows extracted)
                     metadata = vision_result.get('metadata', {})
 
                     # Track number of tables found
@@ -101,14 +94,35 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider=None) -> Dict[s
                             f"Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit"
                         )
 
-                    if metadata.get('calculated_fields'):
+                    # Only process rows if they exist
+                    if vision_result.get('rows'):
+                        used_vision_api = True
+                        all_vision_data.extend(vision_result['rows'])
+
+                        # Collect columns (from first successful extraction)
+                        if not all_columns and vision_result.get('columns'):
+                            all_columns = vision_result['columns']
+
+                        # Additional metadata warnings
+                        if metadata.get('calculated_fields'):
+                            vision_warnings.append(
+                                f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
+                            )
+                        if metadata.get('unreadable_fields'):
+                            vision_warnings.append(
+                                f"Lehekülg {page_num+1}: Loetamatud väljad: {', '.join(metadata['unreadable_fields'])}"
+                            )
+
                         vision_warnings.append(
-                            f"Lehekülg {page_num+1}: Arvutatud väljad: {', '.join(metadata['calculated_fields'])}"
+                            f"Lehekülg {page_num+1}: Ekstraheeritud {len(vision_result['rows'])} rida"
                         )
-                    if metadata.get('unreadable_fields'):
-                        vision_warnings.append(
-                            f"Lehekülg {page_num+1}: Loetamatud väljad: {', '.join(metadata['unreadable_fields'])}"
-                        )
+                    else:
+                        # Warn if tables found but no rows extracted
+                        if metadata.get('tables_found', 0) > 0:
+                            vision_warnings.append(
+                                f"⚠️ Lehekülg {page_num+1}: Leitud {metadata['tables_found']} tabelit, "
+                                f"aga ühtegi rida ei ekstraheeritud! AI ei suutnud tabeleid lugeda."
+                            )
 
         # Step 4: Fallback to OCR + text parsing if vision failed
         if not all_tables and not all_vision_data:

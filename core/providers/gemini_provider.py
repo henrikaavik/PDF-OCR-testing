@@ -162,44 +162,46 @@ Return the cleaned text without explanations."""
         # Convert bytes to PIL Image
         image = Image.open(io.BytesIO(image_bytes))
 
-        prompt = """Analyze this image and find ALL tables present. Extract data from EVERY table you see.
+        prompt = """Extract ALL data from ALL tables in this image.
 
-CRITICAL RULES:
-1. Find ALL tables on this page/image (there may be multiple tables)
-2. For each table, identify ALL column headers
-3. Extract EVERY cell value that is CLEARLY VISIBLE from ALL tables
-4. If a cell is UNREADABLE or BLANK, use "UNREADABLE" as the value
-5. If you can CALCULATE a missing value from other visible data (e.g., sum total), you MAY calculate it
-6. NEVER invent or guess data that isn't visible or calculable
-7. Combine rows from ALL tables into one list (preserve column structure)
-8. For dates: use format dd.mm.yyyy (convert if needed)
-9. For numbers: use numeric values, rounded to 2 decimals
+STEP 1 - Find all tables:
+- Look for ALL tables on this page (there may be 1, 2, 3, or more tables)
+- Count how many distinct tables you see
 
-Return ONLY this JSON structure (no explanations):
+STEP 2 - Extract column headers:
+- For each table, identify ALL column headers
+- Combine all unique column names from all tables
+
+STEP 3 - Extract all rows:
+- For EACH table, extract EVERY row
+- Extract EVERY cell value that is visible
+- If a cell is blank or unreadable, write "UNREADABLE"
+- Combine all rows from all tables into one list
+
+STEP 4 - Format each row:
+- Each row must be a dictionary with ALL column names
+- If a row doesn't have a value for a column, use "UNREADABLE"
+- For dates: format as dd.mm.yyyy
+- For numbers: round to 2 decimals
+
+Return ONLY valid JSON (no markdown, no explanations):
 {
-  "columns": ["Column1", "Column2", "Column3", ...],
+  "columns": ["Col1", "Col2", "Col3"],
   "rows": [
-    {"Column1": "value1", "Column2": "value2", "Column3": "value3", ...},
-    {"Column1": "value1", "Column2": "value2", "Column3": "value3", ...}
+    {"Col1": "value", "Col2": "value", "Col3": "value"},
+    {"Col1": "value", "Col2": "value", "Col3": "value"}
   ],
   "metadata": {
-    "calculated_fields": [],
-    "unreadable_fields": [],
-    "warnings": [],
-    "total_columns": 0,
-    "total_rows": 0,
-    "tables_found": 0
+    "tables_found": 2,
+    "total_rows": 10,
+    "total_columns": 3
   }
 }
 
-IMPORTANT:
-- If multiple tables have different columns, include ALL unique columns in the "columns" array
-- For rows from tables that don't have certain columns, use "UNREADABLE" for missing columns
-- Extract ALL columns from ALL tables
-- Each row must have values for ALL columns (use "UNREADABLE" for columns not present in that table)
-- If you calculated a field, add "row_X_column_name" to calculated_fields
-- If a field was unreadable, add "row_X_column_name" to unreadable_fields
-- Set "tables_found" to the number of distinct tables you found on this page
+CRITICAL:
+- You MUST return at least one row for each table you find
+- If you see 2 tables, you MUST extract rows from BOTH tables
+- Do NOT return empty "rows" array if you found tables
 """
 
         start_time = time.time()
