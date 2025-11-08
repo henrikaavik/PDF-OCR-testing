@@ -113,7 +113,7 @@ def aggregate_multiple_files(
     Aggregate data from multiple files into a quarterly report.
 
     Args:
-        file_results: List of file processing results, each with 'valid_data' key
+        file_results: List of file processing results, each with 'data' key
 
     Returns:
         Dictionary with:
@@ -128,8 +128,8 @@ def aggregate_multiple_files(
     all_data = []
 
     for result in file_results:
-        if 'valid_data' in result and result['valid_data']:
-            all_data.extend(result['valid_data'])
+        if 'data' in result and result['data']:
+            all_data.extend(result['data'])
 
     if not all_data:
         return {
