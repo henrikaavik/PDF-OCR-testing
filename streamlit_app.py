@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "2.0.0"  # AI-only: Rule-based methods removed, Vision API only
+__version__ = "2.1.0"  # Visual table structure extraction (borders, merged cells, bold text)
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
