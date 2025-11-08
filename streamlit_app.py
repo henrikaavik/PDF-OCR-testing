@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "1.3.0"  # Dynamic table extraction with Vision API
+__version__ = "1.4.0"  # Multi-table extraction from single page
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
