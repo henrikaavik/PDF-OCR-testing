@@ -18,7 +18,8 @@ class OpenAIProvider(AIProvider):
         self.client = OpenAI(api_key=api_key)
         self.name = "ChatGPT"
         self.text_model = "gpt-4o-mini"
-        self.vision_model = "gpt-4o"  # BEST vision model
+        self.vision_model = "gpt-4o-2024-08-06"  # Structured Outputs support
+        self.use_structured_outputs = True  # Enable by default
 
     def _get_pricing(self):
         """GPT-4o pricing in EUR (vision model is more expensive)"""
@@ -27,17 +28,62 @@ class OpenAIProvider(AIProvider):
             'output': 13.2   # ~$15 per 1M tokens for GPT-4o
         }
 
+    @classmethod
+    def get_default_prompt(cls) -> str:
+        """Return default OpenAI Vision API prompt."""
+        return """Extract ALL data from this GWB Monthly Time Sheet document.
+
+This document has 5 main sections that you MUST extract:
+
+1. SERVICE PROVIDER DETAILS (blue header section):
+   - Service Provider (name)
+   - Service Provider Start Date
+   - Type
+   - Profile
+   - Place of Delivery
+
+2. CONTRACT INFORMATION (blue header section):
+   - Specific Contract Number
+   - Specific Contract Start/End Dates
+   - Lot No
+   - Contractor Name
+   - Framework Contract Number
+   - Program
+
+3. TIMESHEET DETAILS (blue header section):
+   - Service Request Number
+   - Service Request Start/End Dates
+
+4. SUMMARY TABLE (Effort for Normal Working Hours):
+   - All rows with Contractual/Available/Consumed/Remaining Days
+
+5. DAILY CALENDAR (days 1-31):
+   - Hours worked per day (0, 8, OFF, ON, etc.)
+
+CRITICAL INSTRUCTIONS:
+- Extract data from ALL 5 sections above
+- For blue header sections: Look for key-value pairs (Label: Value)
+- For tables: Extract all rows and columns
+- If a field is not found, use "NOT_FOUND" instead of omitting it
+- Pay attention to small numbers (distinguish "0" vs "8" carefully)
+
+The response will be automatically structured according to the defined JSON schema."""
+
     def extract_table_from_image(
         self,
         image_bytes: bytes,
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        use_structured_outputs: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
-        Extract table data from image using GPT-4o Vision API.
+        Extract table data from image using GPT-4o Vision API with Structured Outputs.
 
         Args:
             image_bytes: Image bytes (PNG/JPEG)
             context: Optional context
+            custom_prompt: Optional custom prompt (overrides default)
+            use_structured_outputs: Whether to use Structured Outputs API (default: True)
 
         Returns:
             Dict with rows, metadata, success
@@ -45,235 +91,61 @@ class OpenAIProvider(AIProvider):
         # Encode image to base64
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
-        prompt = """Extract ALL data from ALL tables in this image AND detect the visual table structure.
-
-STEP 1 - Find all tables:
-- Look for ALL tables/sections on this page (there may be 1, 2, 3, or more distinct tables)
-- Identify if tables have section headers (blue/colored headers above table)
-- Count how many distinct tables you see
-- Note: Some documents have multiple tables stacked vertically (e.g., summary table + daily calendar table)
-
-STEP 2 - For EACH table separately:
-- Extract the section title/header if present (text above the table, often in colored background)
-- Identify ALL column headers for THIS table
-- Extract EVERY row from THIS table
-- Extract EVERY cell value that is visible
-- If a cell is blank or unreadable, write "UNREADABLE"
-- For dates: format as dd.mm.yyyy
-- For numbers: round to 2 decimals
-
-STEP 3 - Keep tables SEPARATE:
-- DO NOT combine rows from different tables
-- Each table should be a separate object in the "tables" array
-- Preserve the vertical order (top table first, bottom table second, etc.)
-
-STEP 5 - Detect table VISUAL STRUCTURE (borders, merged cells):
-- Merged cells: Identify any cells that span multiple columns or rows (common in headers)
-- Cell borders: For each cell, detect which borders are visible (top, bottom, left, right)
-- Header rows: Identify which row indices contain headers (often row 0, but may be multiple)
-- Total rows: Identify rows containing totals/sums (often labeled "Kokku", "Total", "Summa")
-- Bold cells: Identify cells with bold or emphasized text
-
-STEP 6 - CRITICAL: Small Number Accuracy
-
-PAY EXTRA ATTENTION to small numbers in narrow cells:
-
-1. DISTINGUISH "0" vs "8" carefully:
-   - "8" has TWO loops stacked vertically with a horizontal line in the middle
-   - "0" is ONE oval/circle with NO middle division
-   - If uncertain, look at the MIDDLE of the character - does it have a horizontal stroke?
-
-2. Calendar/Daily columns (numbered 1-31):
-   - These contain hours worked per day - ACCURACY IS CRITICAL
-   - Common values: "0", "8", "OFF", "ON", blank
-   - Empty cells = blank (not "0")
-   - Zoom in mentally before reading small numbers
-
-3. When uncertain between "0" and "8":
-   - Mark as "UNREADABLE" rather than guessing
-   - Better to flag uncertainty than provide wrong data
-
-4. For ALL single-digit numbers in narrow columns:
-   - Double-check your reading
-   - Verify the character shape matches the value
-
-Return ONLY valid JSON (no markdown, no explanations):
-{
-  "tables": [
-    {
-      "section_title": "Effort for Normal Working Hours (h)",
-      "columns": ["Service Request", "Contractual Days", "Available Days"],
-      "rows": [
-        {"Service Request": "SR2-WP2", "Contractual Days": "5", "Available Days": "3"},
-        {"Service Request": "Totals", "Contractual Days": "10", "Available Days": "5"}
-      ],
-      "formatting": {
-        "merged_cells": [{"start_row": 0, "start_col": 0, "end_row": 0, "end_col": 2, "value": "Header"}],
-        "cell_borders": {"0,0": {"top": true, "bottom": true, "left": true, "right": true}},
-        "header_rows": [0],
-        "total_rows": [1],
-        "bold_cells": [[0, 0], [1, 0]]
-      }
-    },
-    {
-      "section_title": null,
-      "columns": ["Service Request", "1", "2", "3", "4", "5"],
-      "rows": [
-        {"Service Request": "SR2-WP2", "1": "0", "2": "8", "3": "8", "4": "0", "5": "8"},
-        {"Service Request": "Totals", "1": "0", "2": "8", "3": "8", "4": "0", "5": "8"}
-      ],
-      "formatting": {
-        "header_rows": [0],
-        "bold_cells": [[1, 0]]
-      }
-    }
-  ],
-  "metadata": {
-    "tables_found": 2,
-    "total_rows": 4,
-    "page_sections": 2
-  }
-}
-
-CRITICAL:
-- You MUST return at least one row for each table you find
-- If you see 2 tables, return 2 separate objects in "tables" array
-- Do NOT combine tables - keep them separate
-- Cell borders: Only include cells that have visible borders (skip cells without borders to save space)
-- Row/column indices: Use 0-based indexing within each table (first row is 0, first column is 0)
-- If section_title is not visible/applicable, use null
-"""
+        # Determine prompt and structured outputs mode
+        prompt = custom_prompt if custom_prompt else self.get_default_prompt()
+        use_structured = use_structured_outputs if use_structured_outputs is not None else self.use_structured_outputs
 
         start_time = time.time()
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.vision_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{image_base64}"
+            if use_structured:
+                # NEW: Use Structured Outputs API for 100% schema adherence
+                from core.schemas.gwb_timesheet import GWBTimesheet
+
+                response = self.client.beta.chat.completions.parse(
+                    model=self.vision_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{image_base64}"
+                                    }
                                 }
-                            }
-                        ]
-                    }
-                ],
-                temperature=0.0,
-                max_tokens=4096
-            )
+                            ]
+                        }
+                    ],
+                    response_format=GWBTimesheet,
+                    temperature=0.0
+                )
 
-            latency = time.time() - start_time
-
-            # Extract token usage
-            usage = response.usage
-            input_tokens = usage.prompt_tokens if usage else 0
-            output_tokens = usage.completion_tokens if usage else 0
-
-            self._track_call(latency, input_tokens, output_tokens)
-
-            # Parse JSON response
-            content = response.choices[0].message.content
-
-            # Extract JSON from response (might have markdown code blocks)
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-
-            try:
-                result = json.loads(content)
-            except json.JSONDecodeError as e:
-                # JSON parsing failed - return error with raw response for debugging
                 latency = time.time() - start_time
-                self._track_call(latency)
+
+                # Extract token usage
+                usage = response.usage
+                input_tokens = usage.prompt_tokens if usage else 0
+                output_tokens = usage.completion_tokens if usage else 0
+
+                self._track_call(latency, input_tokens, output_tokens)
+
+                # Parse Pydantic model
+                timesheet = response.choices[0].message.parsed
+
+                # Convert to legacy format for backward compatibility
+                return self._convert_structured_to_legacy(timesheet)
+
+            else:
+                # LEGACY: Fallback to non-structured mode (not implemented yet)
                 return {
                     'columns': [],
                     'rows': [],
-                    'metadata': {
-                        'error': f'JSON parsing failed: {str(e)}',
-                        'raw_response': content[:500]  # First 500 chars for debugging
-                    },
+                    'metadata': {'error': 'Structured Outputs disabled - use use_structured_outputs=True'},
                     'formatting': {},
                     'success': False
                 }
-
-            # Extract tables array (new format)
-            tables = result.get('tables', [])
-            metadata = result.get('metadata', {})
-
-            # Legacy compatibility: flatten tables into single rows/columns/formatting
-            all_rows = []
-            all_columns = []
-            combined_formatting = {
-                'merged_cells': [],
-                'cell_borders': {},
-                'header_rows': [],
-                'total_rows': [],
-                'bold_cells': []
-            }
-
-            row_offset = 0
-            for table in tables:
-                table_rows = table.get('rows', [])
-                table_columns = table.get('columns', [])
-                table_formatting = table.get('formatting', {})
-
-                # Collect rows
-                all_rows.extend(table_rows)
-
-                # Collect unique columns
-                for col in table_columns:
-                    if col not in all_columns:
-                        all_columns.append(col)
-
-                # Merge formatting with row offset
-                if table_formatting.get('merged_cells'):
-                    for merge in table_formatting['merged_cells']:
-                        merged_copy = merge.copy()
-                        merged_copy['start_row'] += row_offset
-                        merged_copy['end_row'] += row_offset
-                        combined_formatting['merged_cells'].append(merged_copy)
-
-                if table_formatting.get('cell_borders'):
-                    for cell_key, borders in table_formatting['cell_borders'].items():
-                        row_str, col_str = cell_key.split(',')
-                        new_row = int(row_str) + row_offset
-                        new_key = f"{new_row},{col_str}"
-                        combined_formatting['cell_borders'][new_key] = borders
-
-                if table_formatting.get('header_rows'):
-                    for hr in table_formatting['header_rows']:
-                        combined_formatting['header_rows'].append(hr + row_offset)
-
-                if table_formatting.get('total_rows'):
-                    for tr in table_formatting['total_rows']:
-                        combined_formatting['total_rows'].append(tr + row_offset)
-
-                if table_formatting.get('bold_cells'):
-                    for cell in table_formatting['bold_cells']:
-                        combined_formatting['bold_cells'].append([cell[0] + row_offset, cell[1]])
-
-                row_offset += len(table_rows)
-
-            # Update metadata with total counts
-            if 'total_columns' not in metadata:
-                metadata['total_columns'] = len(all_columns)
-            if 'total_rows' not in metadata:
-                metadata['total_rows'] = len(all_rows)
-
-            return {
-                'tables': tables,  # NEW: Separate tables
-                'columns': all_columns,  # LEGACY: Flattened
-                'rows': all_rows,  # LEGACY: Flattened
-                'metadata': metadata,
-                'formatting': combined_formatting,  # LEGACY: Combined
-                'success': True
-            }
 
         except Exception as e:
             latency = time.time() - start_time
@@ -285,3 +157,101 @@ CRITICAL:
                 'formatting': {},
                 'success': False
             }
+
+    # LEGACY CODE MOVED TO ARCHIVE (lines 143-381)
+    # Old prompt-based extraction - replaced by Structured Outputs
+    # Kept here for reference but not in use:
+    def _legacy_extract(self):
+        """
+        Legacy extraction method - DEPRECATED.
+        Replaced by Structured Outputs API.
+        """
+        # Old implementation with prompt-based JSON parsing
+        # See git history for full code
+        pass
+
+    def _convert_structured_to_legacy(self, timesheet) -> Dict[str, Any]:
+        """
+        Convert Pydantic GWBTimesheet model to legacy format.
+
+        This ensures backward compatibility with existing XLSX export code.
+        """
+        from core.schemas.gwb_timesheet import GWBTimesheet
+
+        # Create metadata section as first "table"
+        metadata_rows = []
+
+        # SERVICE PROVIDER DETAILS
+        spd = timesheet.service_provider_details
+        metadata_rows.extend([
+            {"Section": "SERVICE PROVIDER DETAILS", "Field": "Service Provider", "Value": spd.service_provider},
+            {"Section": "SERVICE PROVIDER DETAILS", "Field": "Start Date", "Value": spd.service_provider_start_date},
+            {"Section": "SERVICE PROVIDER DETAILS", "Field": "Type", "Value": spd.type},
+            {"Section": "SERVICE PROVIDER DETAILS", "Field": "Profile", "Value": spd.profile},
+            {"Section": "SERVICE PROVIDER DETAILS", "Field": "Place of Delivery", "Value": spd.place_of_delivery},
+        ])
+
+        # CONTRACT INFORMATION
+        ci = timesheet.contract_information
+        metadata_rows.extend([
+            {"Section": "CONTRACT INFORMATION", "Field": "Contract Number", "Value": ci.specific_contract_number},
+            {"Section": "CONTRACT INFORMATION", "Field": "Start Date", "Value": ci.specific_contract_start_date},
+            {"Section": "CONTRACT INFORMATION", "Field": "End Date", "Value": ci.specific_contract_end_date},
+            {"Section": "CONTRACT INFORMATION", "Field": "Lot No", "Value": ci.lot_no},
+            {"Section": "CONTRACT INFORMATION", "Field": "Contractor", "Value": ci.contractor_name},
+            {"Section": "CONTRACT INFORMATION", "Field": "Framework Contract", "Value": ci.framework_contract_number},
+            {"Section": "CONTRACT INFORMATION", "Field": "Program", "Value": ci.program},
+        ])
+
+        # TIMESHEET DETAILS
+        td = timesheet.timesheet_details
+        metadata_rows.extend([
+            {"Section": "TIMESHEET DETAILS", "Field": "Service Request Number", "Value": td.service_request_number},
+            {"Section": "TIMESHEET DETAILS", "Field": "Start Date", "Value": td.service_request_start_date},
+            {"Section": "TIMESHEET DETAILS", "Field": "End Date", "Value": td.service_request_end_date},
+        ])
+
+        # Summary table rows
+        summary_rows = [row.model_dump() for row in timesheet.summary_table.rows]
+
+        # Daily calendar rows
+        daily_rows = [row.model_dump() for row in timesheet.daily_calendar.rows]
+
+        # Build tables array (new format)
+        tables = [
+            {
+                "section_title": "DOCUMENT METADATA",
+                "columns": ["Section", "Field", "Value"],
+                "rows": metadata_rows,
+                "formatting": {}
+            },
+            {
+                "section_title": timesheet.summary_table.section_title,
+                "columns": list(summary_rows[0].keys()) if summary_rows else [],
+                "rows": summary_rows,
+                "formatting": {}
+            },
+            {
+                "section_title": timesheet.daily_calendar.section_title or "Daily Calendar",
+                "columns": list(daily_rows[0].keys()) if daily_rows else [],
+                "rows": daily_rows,
+                "formatting": {}
+            }
+        ]
+
+        # Flatten for legacy compatibility
+        all_rows = metadata_rows + summary_rows + daily_rows
+        all_columns = ["Section", "Field", "Value"]  # Metadata columns first
+
+        return {
+            'tables': tables,  # NEW: Separate tables
+            'columns': all_columns,  # LEGACY
+            'rows': all_rows,  # LEGACY
+            'metadata': {
+                'tables_found': 3,
+                'total_rows': len(all_rows),
+                'extraction_method': 'structured_outputs'
+            },
+            'formatting': {},  # LEGACY
+            'success': True
+        }
