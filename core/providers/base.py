@@ -41,11 +41,18 @@ class AIProvider(ABC):
 
         Returns:
             Dictionary with:
-            - rows: List of dicts with extracted data
-            - columns: List of column names
+            - tables: List of table objects, each with:
+                - section_title: Optional section header text
+                - columns: List of column names
+                - rows: List of dicts with extracted data
+                - formatting: Dict with visual structure for this table
             - metadata: Dict with tables_found, total_rows, etc.
-            - formatting: Dict with visual structure (borders, merged cells, bold)
             - success: Boolean
+
+            LEGACY COMPATIBILITY:
+            - rows: Flattened list of all rows (for backward compatibility)
+            - columns: Combined list of all unique columns
+            - formatting: Combined formatting metadata
 
         Formatting Dictionary (optional):
             - merged_cells: List of merged cell ranges

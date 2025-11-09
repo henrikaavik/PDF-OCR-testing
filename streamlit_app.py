@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "3.0.2"  # Optimization: DPI reduced to 400 for Vision API limits
+__version__ = "3.1.0"  # Feature: Multi-table support - preserve table separation in XLSX
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -58,6 +58,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
         # Step 3: Extract with Vision API
         all_data = []
         all_columns = []
+        all_tables = []  # NEW: Collect separate tables
         tables_found = 0
         combined_formatting = {
             'merged_cells': [],
@@ -80,20 +81,24 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
             )
 
             if result['success']:
-                # Collect rows
+                # Collect rows (legacy)
                 if result.get('rows'):
                     all_data.extend(result['rows'])
 
-                # Collect columns (from first page)
+                # Collect columns (from first page - legacy)
                 if not all_columns and result.get('columns'):
                     all_columns = result['columns']
+
+                # Collect separate tables (NEW)
+                if result.get('tables'):
+                    all_tables.extend(result['tables'])
 
                 # Track tables found
                 metadata = result.get('metadata', {})
                 if metadata.get('tables_found'):
                     tables_found += metadata['tables_found']
 
-                # Merge formatting
+                # Merge formatting (legacy)
                 page_formatting = result.get('formatting', {})
                 if page_formatting:
                     if page_formatting.get('merged_cells'):
@@ -124,6 +129,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
             'rows_extracted': len(all_data),
             'columns': all_columns,
             'data': all_data,
+            'tables': all_tables,  # NEW: Separate tables
             'formatting': combined_formatting,
             'ai_cost': file_cost,
             'ai_tokens': file_tokens,
@@ -137,6 +143,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
             'error': str(e),
             'data': [],
             'columns': [],
+            'tables': [],
             'formatting': {}
         }
 
@@ -147,6 +154,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
             'error': str(e),
             'data': [],
             'columns': [],
+            'tables': [],
             'formatting': {}
         }
 
@@ -287,7 +295,8 @@ def main():
                                 result['data'],
                                 result['filename'],
                                 result.get('columns'),
-                                result.get('formatting')
+                                result.get('formatting'),
+                                result.get('tables')  # NEW: Pass separate tables
                             )
                             st.download_button(
                                 label="⬇️ Laadi alla XLSX",
