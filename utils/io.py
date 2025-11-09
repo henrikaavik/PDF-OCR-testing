@@ -172,9 +172,10 @@ def _write_table_with_formatting(
         worksheet.write(start_row, col_num, value, header_format)
 
     # Write data rows
-    for row_idx, row_data in df.iterrows():
-        for col_idx, value in enumerate(row_data):
-            worksheet.write(start_row + row_idx + 1, col_idx, value)
+    for row_num in range(len(df)):
+        for col_num in range(len(df.columns)):
+            value = df.iloc[row_num, col_num]
+            worksheet.write(start_row + row_num + 1, col_num, value)
 
     # Apply cell borders if provided
     cell_borders = formatting.get('cell_borders', {})

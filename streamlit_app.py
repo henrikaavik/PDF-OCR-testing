@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "3.1.0"  # Feature: Multi-table support - preserve table separation in XLSX
+__version__ = "3.1.1"  # Bug fix: DataFrame iteration error in XLSX export
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
