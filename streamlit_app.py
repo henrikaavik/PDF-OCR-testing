@@ -5,11 +5,11 @@ Universal PDF to XLSX converter using AI Vision APIs
 
 import streamlit as st
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import io
 
 # Version
-__version__ = "3.2.0"  # Feature: Structured Outputs + GWB schema for complete extraction
+__version__ = "3.2.1"  # Bug fix: Missing Optional import
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
