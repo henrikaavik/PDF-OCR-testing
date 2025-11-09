@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "3.1.1"  # Bug fix: DataFrame iteration error in XLSX export
+__version__ = "3.1.2"  # Optimization: Reduced DPI to 300 (avoids Gemini downscaling)
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -52,8 +52,8 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
         # Step 1: Ingest (page count check only)
         ingest_result = ingest_pdf(pdf_bytes, filename)
 
-        # Step 2: Convert to images (optimal DPI for Vision API limits)
-        images = pdf_to_images(pdf_bytes, dpi=400)
+        # Step 2: Convert to images (optimal DPI: 300 avoids Gemini downscaling)
+        images = pdf_to_images(pdf_bytes, dpi=300)
 
         # Step 3: Extract with Vision API
         all_data = []
