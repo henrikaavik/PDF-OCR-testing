@@ -16,6 +16,7 @@ pandas>=2.0.0
 numpy>=1.24.0
 openpyxl>=3.1.0
 xlsxwriter>=3.1.0
+pydantic>=2.0.0  # For OpenAI Structured Outputs
 
 # AI Providers
 openai>=1.0.0

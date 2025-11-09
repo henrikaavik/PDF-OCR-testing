@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import io
 
 # Version
-__version__ = "3.1.2"  # Optimization: Reduced DPI to 300 (avoids Gemini downscaling)
+__version__ = "3.2.0"  # Feature: Structured Outputs + GWB schema for complete extraction
 
 # Core imports
 from core.ingest import ingest_pdf, PageLimitExceededError
@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 
-def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, Any]:
+def process_single_pdf(filename: str, pdf_bytes: bytes, provider, custom_prompt: Optional[str] = None) -> Dict[str, Any]:
     """
     Process a single PDF file using AI Vision API.
 
@@ -36,6 +36,7 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
         filename: Original filename
         pdf_bytes: PDF file bytes
         provider: AI provider instance
+        custom_prompt: Optional custom prompt for Vision API
 
     Returns:
         Processing result dictionary
@@ -77,7 +78,8 @@ def process_single_pdf(filename: str, pdf_bytes: bytes, provider) -> Dict[str, A
             # Extract from image using Vision API
             result = provider.extract_table_from_image(
                 image_bytes,
-                context=f"{filename} page {page_num+1}"
+                context=f"{filename} page {page_num+1}",
+                custom_prompt=custom_prompt
             )
 
             if result['success']:
@@ -201,6 +203,50 @@ def main():
 
         st.divider()
 
+        # Custom Vision API Prompt (advanced)
+        with st.expander("🔧 Vision API Prompt (muudetav)", expanded=False):
+            st.caption("💡 **Täiustatud:** Muuda prompti, et parandada GWB dokumendi ekstraheerimist.")
+
+            # Get default prompt from selected provider
+            default_prompt = ""
+            if provider_type == "gemini":
+                from core.providers.gemini_provider import GeminiProvider
+                default_prompt = GeminiProvider.get_default_prompt()
+            elif provider_type == "openai":
+                from core.providers.openai_provider import OpenAIProvider
+                default_prompt = OpenAIProvider.get_default_prompt()
+
+            # Initialize session state for prompt if not exists
+            if 'custom_prompt' not in st.session_state:
+                st.session_state.custom_prompt = default_prompt
+
+            # Custom prompt text area
+            custom_prompt = st.text_area(
+                "Prompt:",
+                value=st.session_state.custom_prompt,
+                height=300,
+                help="Muuda prompti, et täpsustada, mida Vision API peaks ekstraheerima",
+                key="prompt_editor"
+            )
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Taasta vaikeprompt", use_container_width=True):
+                    st.session_state.custom_prompt = default_prompt
+                    st.rerun()
+
+            with col2:
+                # Show if using Structured Outputs (OpenAI only)
+                if provider_type == "openai":
+                    st.success("✓ Structured Outputs (100%)")
+                else:
+                    st.info("ℹ️ Universal JSON prompt")
+
+            # Update session state
+            st.session_state.custom_prompt = custom_prompt
+
+        st.divider()
+
         st.subheader("ℹ️ Info")
         st.info(
             "**Meetod:** AI Vision API\n\n"
@@ -255,9 +301,12 @@ def main():
 
             # Process files
             with st.spinner("Töötlen faile..."):
+                # Get custom prompt from session state
+                custom_prompt = st.session_state.get('custom_prompt', None)
+
                 results = []
                 for filename, file_bytes in files_to_process:
-                    result = process_single_pdf(filename, file_bytes, provider)
+                    result = process_single_pdf(filename, file_bytes, provider, custom_prompt)
                     results.append(result)
 
             # Display results

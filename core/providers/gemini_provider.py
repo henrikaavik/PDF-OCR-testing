@@ -20,6 +20,7 @@ class GeminiProvider(AIProvider):
         self.text_model = genai.GenerativeModel('gemini-1.5-flash')
         self.vision_model = genai.GenerativeModel('gemini-1.5-pro')  # BEST for vision
         self.name = "Gemini"
+        self.use_structured_outputs = False  # Gemini doesn't support Structured Outputs
 
     def _get_pricing(self):
         """Gemini 1.5 Pro pricing in EUR (vision model)"""
@@ -28,10 +29,99 @@ class GeminiProvider(AIProvider):
             'output': 4.4     # ~$5 per 1M tokens for Pro
         }
 
+    @classmethod
+    def get_default_prompt(cls) -> str:
+        """Return default Gemini Vision API prompt with universal schema."""
+        return """Extract ALL data from this GWB Monthly Time Sheet document in structured JSON format.
+
+IMPORTANT: This document has 5 main sections - you MUST extract data from ALL of them:
+
+SECTION 1: SERVICE PROVIDER DETAILS (blue header box)
+Extract these fields:
+- service_provider (name)
+- service_provider_start_date (dd/mm/yyyy)
+- type (e.g., QTM, GTM)
+- profile (job title/role)
+- place_of_delivery (location)
+
+SECTION 2: CONTRACT INFORMATION (blue header box)
+Extract these fields:
+- specific_contract_number
+- specific_contract_start_date (dd/mm/yyyy)
+- specific_contract_end_date (dd/mm/yyyy)
+- lot_no
+- contractor_name (company)
+- framework_contract_number
+- program (program name)
+
+SECTION 3: TIMESHEET DETAILS (blue header box)
+Extract these fields:
+- service_request_number (e.g., SR2)
+- service_request_start_date (dd/mm/yyyy)
+- service_request_end_date (dd/mm/yyyy)
+
+SECTION 4: SUMMARY TABLE (Effort for Normal Working Hours)
+Extract ALL rows with columns:
+- service_request
+- contractual_days_onsite, contractual_days_offsite
+- available_days_onsite, available_days_offsite
+- consumed_days_onsite, consumed_days_offsite
+- remaining_days_onsite, remaining_days_offsite
+
+SECTION 5: DAILY CALENDAR (days 1-31)
+Extract ALL rows with columns:
+- service_request
+- day_1, day_2, day_3, ... day_31 (hours: 0, 8, OFF, ON, or empty)
+
+CRITICAL RULES:
+1. If a field is not found or unreadable, use "NOT_FOUND" instead of omitting it
+2. For small numbers (0 vs 8): "8" has TWO loops with middle line, "0" is ONE oval
+3. Empty calendar cells should be null, not "0"
+4. Extract data from ALL 5 sections - do not skip any section
+
+Return valid JSON ONLY (no markdown, no explanations):
+{
+  "service_provider_details": {
+    "service_provider": "...",
+    "service_provider_start_date": "...",
+    "type": "...",
+    "profile": "...",
+    "place_of_delivery": "..."
+  },
+  "contract_information": {
+    "specific_contract_number": "...",
+    "specific_contract_start_date": "...",
+    "specific_contract_end_date": "...",
+    "lot_no": "...",
+    "contractor_name": "...",
+    "framework_contract_number": "...",
+    "program": "..."
+  },
+  "timesheet_details": {
+    "service_request_number": "...",
+    "service_request_start_date": "...",
+    "service_request_end_date": "..."
+  },
+  "summary_table": {
+    "section_title": "Effort for Normal Working Hours (h)",
+    "rows": [
+      {"service_request": "...", "contractual_days_onsite": "...", ...}
+    ]
+  },
+  "daily_calendar": {
+    "section_title": null,
+    "rows": [
+      {"service_request": "...", "day_1": "...", "day_2": "...", ...}
+    ]
+  }
+}"""
+
     def extract_table_from_image(
         self,
         image_bytes: bytes,
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        use_structured_outputs: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Extract table data from image using Gemini 1.5 Pro Vision API.
@@ -39,6 +129,8 @@ class GeminiProvider(AIProvider):
         Args:
             image_bytes: Image bytes (PNG/JPEG)
             context: Optional context
+            custom_prompt: Optional custom prompt (overrides default)
+            use_structured_outputs: Ignored (Gemini doesn't support Structured Outputs)
 
         Returns:
             Dict with rows, metadata, success
@@ -46,104 +138,8 @@ class GeminiProvider(AIProvider):
         # Convert bytes to PIL Image
         image = Image.open(io.BytesIO(image_bytes))
 
-        prompt = """Extract ALL data from ALL tables in this image AND detect the visual table structure.
-
-STEP 1 - Find all tables:
-- Look for ALL tables/sections on this page (there may be 1, 2, 3, or more distinct tables)
-- Identify if tables have section headers (blue/colored headers above table)
-- Count how many distinct tables you see
-- Note: Some documents have multiple tables stacked vertically (e.g., summary table + daily calendar table)
-
-STEP 2 - For EACH table separately:
-- Extract the section title/header if present (text above the table, often in colored background)
-- Identify ALL column headers for THIS table
-- Extract EVERY row from THIS table
-- Extract EVERY cell value that is visible
-- If a cell is blank or unreadable, write "UNREADABLE"
-- For dates: format as dd.mm.yyyy
-- For numbers: round to 2 decimals
-
-STEP 3 - Keep tables SEPARATE:
-- DO NOT combine rows from different tables
-- Each table should be a separate object in the "tables" array
-- Preserve the vertical order (top table first, bottom table second, etc.)
-
-STEP 5 - Detect table VISUAL STRUCTURE (borders, merged cells):
-- Merged cells: Identify any cells that span multiple columns or rows (common in headers)
-- Cell borders: For each cell, detect which borders are visible (top, bottom, left, right)
-- Header rows: Identify which row indices contain headers (often row 0, but may be multiple)
-- Total rows: Identify rows containing totals/sums (often labeled "Kokku", "Total", "Summa")
-- Bold cells: Identify cells with bold or emphasized text
-
-STEP 6 - CRITICAL: Small Number Accuracy
-
-PAY EXTRA ATTENTION to small numbers in narrow cells:
-
-1. DISTINGUISH "0" vs "8" carefully:
-   - "8" has TWO loops stacked vertically with a horizontal line in the middle
-   - "0" is ONE oval/circle with NO middle division
-   - If uncertain, look at the MIDDLE of the character - does it have a horizontal stroke?
-
-2. Calendar/Daily columns (numbered 1-31):
-   - These contain hours worked per day - ACCURACY IS CRITICAL
-   - Common values: "0", "8", "OFF", "ON", blank
-   - Empty cells = blank (not "0")
-   - Zoom in mentally before reading small numbers
-
-3. When uncertain between "0" and "8":
-   - Mark as "UNREADABLE" rather than guessing
-   - Better to flag uncertainty than provide wrong data
-
-4. For ALL single-digit numbers in narrow columns:
-   - Double-check your reading
-   - Verify the character shape matches the value
-
-Return ONLY valid JSON (no markdown, no explanations):
-{
-  "tables": [
-    {
-      "section_title": "Effort for Normal Working Hours (h)",
-      "columns": ["Service Request", "Contractual Days", "Available Days"],
-      "rows": [
-        {"Service Request": "SR2-WP2", "Contractual Days": "5", "Available Days": "3"},
-        {"Service Request": "Totals", "Contractual Days": "10", "Available Days": "5"}
-      ],
-      "formatting": {
-        "merged_cells": [{"start_row": 0, "start_col": 0, "end_row": 0, "end_col": 2, "value": "Header"}],
-        "cell_borders": {"0,0": {"top": true, "bottom": true, "left": true, "right": true}},
-        "header_rows": [0],
-        "total_rows": [1],
-        "bold_cells": [[0, 0], [1, 0]]
-      }
-    },
-    {
-      "section_title": null,
-      "columns": ["Service Request", "1", "2", "3", "4", "5"],
-      "rows": [
-        {"Service Request": "SR2-WP2", "1": "0", "2": "8", "3": "8", "4": "0", "5": "8"},
-        {"Service Request": "Totals", "1": "0", "2": "8", "3": "8", "4": "0", "5": "8"}
-      ],
-      "formatting": {
-        "header_rows": [0],
-        "bold_cells": [[1, 0]]
-      }
-    }
-  ],
-  "metadata": {
-    "tables_found": 2,
-    "total_rows": 4,
-    "page_sections": 2
-  }
-}
-
-CRITICAL:
-- You MUST return at least one row for each table you find
-- If you see 2 tables, return 2 separate objects in "tables" array
-- Do NOT combine tables - keep them separate
-- Cell borders: Only include cells that have visible borders (skip cells without borders to save space)
-- Row/column indices: Use 0-based indexing within each table (first row is 0, first column is 0)
-- If section_title is not visible/applicable, use null
-"""
+        # Use custom prompt or default
+        prompt = custom_prompt if custom_prompt else self.get_default_prompt()
 
         start_time = time.time()
 
